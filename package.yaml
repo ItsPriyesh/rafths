@@ -28,6 +28,7 @@ dependencies:
 - vector
 - QuickCheck
 - thrift >= 0.12.0
+- network
 
 library:
   source-dirs: src
