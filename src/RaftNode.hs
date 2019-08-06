@@ -183,8 +183,8 @@ requestVotes ch (Candidate p) peers = do
   -- thread safe atomic counter for parallel vote RPCs
   voteCount <- newCounter 1
 
-  -- call requestVote RPC on each peer, update chan when majority received
-  mapM_ (forkIO . (getVote voteCount)) peers
+  -- call requestVote RPC on each peer concurrently
+  mapM_ (forkIO . getVote voteCount) (filter (/= self p) peers)
 
   event <- readChan ch
   electionResult event
