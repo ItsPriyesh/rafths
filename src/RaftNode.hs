@@ -17,7 +17,9 @@ import Thrift.Protocol
 import Thrift.Protocol.Binary
 import Thrift.Transport
 import Thrift.Transport.Handle
+import Thrift.Transport.Framed
 import Thrift.Server
+
 import Network
 import Network.HostName
 import System.IO
@@ -91,8 +93,14 @@ start port peers = do
   -- spin up server on main thread
   print "Starting server..."
   -- delayMs 100000000
-  _ <- runBasicServer hand ClusterNode.process port -- todo runThreadedServer
+  -- _ <- runBasicServer hand ClusterNode.process port -- todo runThreadedServer
+  _ <- runThreadedServer acceptor hand ClusterNode.process (PortNumber $ fromIntegral port)
   print "Server terminated!"
+  where
+    acceptor sock = do
+      (h, _, _) <- (accept sock)
+      t <- openFramedTransport h
+      return (BinaryProtocol t, BinaryProtocol t)
 
 
 newNodeHandler :: PortNumber -> [Peer] -> IO NodeHand
@@ -175,7 +183,8 @@ newCandidate p = Candidate p { currentTerm = 1 + currentTerm p}
 
 requestVotes :: Chan Event -> State -> [Peer] -> IO State
 requestVotes ch (Candidate p) peers = do
-  forkIO $ do -- restart election timeout
+  -- restart election timeout
+  forkIO $ do
     timeout <- randomElectionTimeout
     delayMs timeout
     writeChan ch ElectionTimeout
@@ -186,19 +195,21 @@ requestVotes ch (Candidate p) peers = do
   -- call requestVote RPC on each peer concurrently
   mapM_ (forkIO . getVote voteCount) (filter (/= self p) peers)
 
+  -- listen for a state transition event
   event <- readChan ch
   electionResult event
 
   where
-    electionResult ElectionTimeout = requestVotes ch (Candidate p) peers -- stay in same state, start new election
-    electionResult ReceivedMajorityVote = pure $ Leader p [] [] -- todo init these arrays properly
-    electionResult ReceivedAppend = pure $ Follower p
-
     getVote :: AtomicCounter -> Peer -> IO ()
     getVote count peer = do
       vote <- requestVoteFromPeer p peer -- todo check that this fails after a short timeout 
       votes <- if T.voteResponse_granted vote then incrCounter 1 count else readCounter count
       if votes >= majority peers then writeChan ch ReceivedMajorityVote else pure ()
+
+    electionResult ElectionTimeout = requestVotes ch (Candidate p) peers -- stay in same state, start new election
+    electionResult ReceivedMajorityVote = pure $ Leader p [] [] -- todo init these arrays properly
+    electionResult ReceivedAppend = pure $ Follower p
+
 
 requestVoteFromPeer :: Props -> Peer -> IO T.VoteResponse
 requestVoteFromPeer p peer = do
