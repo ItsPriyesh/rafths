@@ -2,4 +2,4 @@ module Main where
 
 import RaftNode
 
-main = RaftNode.start 8080 [Peer "localhost" 8080]
+main = RaftNode.start 10123 [Peer "localhost" 10123]

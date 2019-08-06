@@ -1,12 +1,17 @@
+{-# LANGUAGE DeriveGeneric #-}
+
 module RaftNode where
 
+import GHC.Generics (Generic)
+import GHC.Conc.Sync (ThreadId)
+import Data.Hashable
+import Data.Atomics.Counter
+import Data.Maybe
+import Data.Int
 import Control.Concurrent.MVar
 import Control.Concurrent.Chan
 import Control.Concurrent (forkIO, threadDelay, myThreadId)
-
 import Control.Monad (forever)
-
-import GHC.Conc.Sync (ThreadId)
 import Thrift
 import Thrift.Protocol
 import Thrift.Protocol.Binary
@@ -14,9 +19,7 @@ import Thrift.Transport
 import Thrift.Transport.Handle
 import Thrift.Server
 import Network
-import Data.Maybe
-import Data.Int
-
+import Network.HostName
 import System.IO
 import System.Random
 
@@ -25,30 +28,37 @@ import ClusterNode
 import qualified ClusterNode_Client as Client
 import qualified Rafths_Types as T
 
-data Peer = Peer { host :: String, port :: Int } deriving (Eq)
+data Peer = Peer { host :: String, port :: Int } deriving (Eq, Show, Generic)
+instance Hashable Peer
 
 data NodeHand = NodeHand { peers :: [Peer], state :: MVar State, chan :: Chan Event }
 
 data State = Follower Props 
            | Candidate Props 
            | Leader Props [Int] [Int]
+           deriving Show
+
+nextIndex (Leader _ n _) = n
+matchIndex (Leader _ _ n) = n
 
 data Event = ElectionTimeout -- whenever election timeout elapses without receiving heartbeat/grant vote
            | ReceivedMajorityVote -- candidate received majority, become leader
-           | ReceivedAppendFromLeader -- candidate contacted by leader during election, become follower
+           | ReceivedAppend -- candidate contacted by leader during election, become follower
+           deriving Show
 
-data LogEntry = LogEntry { key :: String , value :: String }
+data LogEntry = LogEntry { keyVal :: (String, String), term :: Int } deriving Show
 
 data Props = Props {
+  self :: Peer,
   currentTerm :: Int64,
   votedFor :: Maybe Int32,
   logEntries :: [LogEntry],
   commitIndex :: Int32,
   lastApplied :: Int32
-}
+} deriving Show
 
-emptyProps :: Props
-emptyProps = Props 0 Nothing [] 0 0
+newProps :: Peer -> Props
+newProps self = Props self 0 Nothing [] 0 0
 
 getProps :: State -> Props
 getProps (Follower p) = p
@@ -57,31 +67,38 @@ getProps (Leader p _ _) = p
 
 start :: PortNumber -> [Peer] -> IO ()
 start port peers = do
-  hand <- newNodeHandler peers
-
-  chan <- newChan :: IO (Chan String)
+  hand <- newNodeHandler port peers
 
   -- write to channel periodically on a new thread
   forkIO $ forever $ do
-    state <- getState hand
+    -- c <- chan hand
 
-    timeout <- randomElectionTimeout 1000 -- reset this timeout whenever we receive heartbeat from leader or granted vote to candidate
+    timeout <- randomElectionTimeout -- reset this timeout whenever we receive heartbeat from leader or granted vote to candidate
     delayMs timeout
-    writeChan chan "hi!"
+    writeChan (chan hand) ElectionTimeout
 
   -- read from channel on a new thread (blocks current thread)
   forkIO $ forever $ do
-    readChan chan >>= print 
+    -- c <- chan hand
+    event <- readChan $ chan hand
+    state <- getState hand
+    print "handling :"
+    print event
+    print state
+    newState <- handleEvent state event
+    setState hand newState
 
   -- spin up server on main thread
   print "Starting server..."
+  -- delayMs 100000000
   _ <- runBasicServer hand ClusterNode.process port -- todo runThreadedServer
   print "Server terminated!"
 
 
-newNodeHandler :: [Peer] -> IO NodeHand
-newNodeHandler peers = do
-  state <- newMVar $ Follower emptyProps
+newNodeHandler :: PortNumber -> [Peer] -> IO NodeHand
+newNodeHandler port peers = do
+  host <- getHostName
+  state <- newMVar $ Follower (newProps $ Peer host (fromIntegral $ port))
   chan <- newChan :: IO (Chan Event)
   pure $ NodeHand peers state chan
 
@@ -99,55 +116,114 @@ instance ClusterNode_Iface NodeHand where
   appendEntries = appendEntriesHandler
 
 requestVoteHandler :: NodeHand -> T.VoteRequest -> IO T.VoteResponse
-requestVoteHandler handler request = do
+requestVoteHandler h req = do
   print "requestVote()"
-  state <- getState handler
+  state <- getState h
   let p = getProps state
-  pure $ newVoteResponse (currentTerm p) (shouldGrant p request)
+  pure $ newVoteResponse (currentTerm p) (shouldGrant p req)
 
-appendEntriesHandler :: NodeHand -> T.AppendRequest -> IO T.AppendResponse
-appendEntriesHandler handler request = do
-  pure T.AppendResponse { T.appendResponse_term = 1, T.appendResponse_success = True }
-
----
 newVoteResponse :: Int64 -> Bool -> T.VoteResponse
-newVoteResponse term grant = T.VoteResponse { T.voteResponse_term = term, T.voteResponse_granted = grant }
+newVoteResponse term grant = T.VoteResponse { 
+  T.voteResponse_term = term, 
+  T.voteResponse_granted = grant
+}
 
 shouldGrant :: Props -> T.VoteRequest -> Bool
 shouldGrant p req = 
-  if currentTerm p > T.voteRequest_term req then False else grant
+  if currentTerm p > T.voteRequest_term req then False
+  else voted && localLast <= candidateLast
   where
     voted = maybe True (== T.voteRequest_candidateId req) (votedFor p)
-    upToDate = (length $ logEntries $ p) - 1 <= (fromIntegral $ T.voteRequest_lastLogIndex req)
-    grant = voted && upToDate
+    localLast = (length $ logEntries $ p) - 1
+    candidateLast = fromIntegral $ T.voteRequest_lastLogIndex req
 
+appendEntriesHandler :: NodeHand -> T.AppendRequest -> IO T.AppendResponse
+appendEntriesHandler h req = do
+  print "appendEntries()"
+  writeChan (chan h) ReceivedAppend
+  state <- getState h
+  let p = getProps state
+  pure $ newAppendResponse (currentTerm p) True
+
+newAppendResponse :: Int64 -> Bool -> T.AppendResponse
+newAppendResponse term success = T.AppendResponse { 
+  T.appendResponse_term = term, 
+  T.appendResponse_success = success 
+}
+
+-- shouldAppendEntries :: Props -> T.AppendRequest -> Bool
+-- shouldAppendEntries p req =
+--   if currentTerm p > T.appendRequest_term req then False
+--   else
+--     let log = logEntries p
+--     if T.appendRequest_prevLogIndex >= (length log - 1)) || ((term (log !! T.appendRequest_prevLogIndex)) != T.appendRequest_prevLogTerm) then False
+--     else True
 
 -- Create client RPC stub referencing another node in the cluster
-newThriftClient :: String -> Integer -> IO (BinaryProtocol Handle, BinaryProtocol Handle)
+newThriftClient :: String -> Int -> IO (BinaryProtocol Handle, BinaryProtocol Handle)
 newThriftClient host port = do
-  transport <- hOpen (host, (PortNumber . fromInteger $ port))
+  transport <- hOpen (host, PortNumber . fromIntegral $ port)
   let proto = BinaryProtocol transport
   pure (proto, proto)
 
--- To begin an election, a follower increments its current
--- term and transitions to candidate state. It then votes for
--- itself and issues RequestVote RPCs in parallel to each of
--- the other servers in the cluster. A candidate continues in
--- this state until one of three things happens: (a) it wins the
--- election, (b) another server establishes itself as leader, or
--- (c) a period of time goes by with no winner. 
--- These outcomes are discussed separately in the paragraphs below
-beginElection :: IO State
-beginElection = do
-  mid <- myThreadId
-  print "beginElection on thread "
-  print mid
-  pure $ Candidate emptyProps
+handleEvent :: State -> Event -> IO State
+handleEvent (Follower p) ElectionTimeout = do
+  print "converting follower to candidate"
+  pure $ newCandidate p
 
-randomElectionTimeout :: Int -> IO Int
-randomElectionTimeout t = randomRIO (t, 2 * t)
+newCandidate p = Candidate p { currentTerm = 1 + currentTerm p}
+
+requestVotes :: Chan Event -> State -> [Peer] -> IO State
+requestVotes ch (Candidate p) peers = do
+  forkIO $ do -- restart election timeout
+    timeout <- randomElectionTimeout
+    delayMs timeout
+    writeChan ch ElectionTimeout
+
+  -- thread safe atomic counter for parallel vote RPCs
+  voteCount <- newCounter 1
+
+  -- call requestVote RPC on each peer, update chan when majority received
+  mapM_ (forkIO . (getVote voteCount)) peers
+
+  event <- readChan ch
+  electionResult event
+
+  where
+    electionResult ElectionTimeout = requestVotes ch (Candidate p) peers -- stay in same state, start new election
+    electionResult ReceivedMajorityVote = pure $ Leader p [] [] -- todo init these arrays properly
+    electionResult ReceivedAppend = pure $ Follower p
+
+    getVote :: AtomicCounter -> Peer -> IO ()
+    getVote count peer = do
+      vote <- requestVoteFromPeer p peer -- todo check that this fails after a short timeout 
+      votes <- if T.voteResponse_granted vote then incrCounter 1 count else readCounter count
+      if votes >= majority peers then writeChan ch ReceivedMajorityVote else pure ()
+
+requestVoteFromPeer :: Props -> Peer -> IO T.VoteResponse
+requestVoteFromPeer p peer = do
+  c <- newThriftClient (host peer) (port peer)
+  let lastLogIndex = (length $ logEntries $ p) - 1
+  let lastLogTerm = if lastLogIndex >= 0 then term $ (logEntries p) !! lastLogIndex else 1
+  let req = newVoteRequest (self p) (currentTerm p) lastLogTerm lastLogIndex
+  Client.requestVote c req
+
+newVoteRequest :: Peer -> Int64 -> Int -> Int -> T.VoteRequest
+newVoteRequest candidate term lastLogTerm lastLogIndex = T.VoteRequest { 
+  T.voteRequest_candidateId = fromIntegral $ hash candidate,
+  T.voteRequest_term = term,
+  T.voteRequest_lastLogTerm = fromIntegral lastLogTerm,
+  T.voteRequest_lastLogIndex = fromIntegral lastLogIndex
+}
+
+randomElectionTimeout :: IO Int
+randomElectionTimeout = do
+  let t = 5 * 1000 -- 5s
+  randomRIO (t, 2 * t)
 
 delayMs :: Int -> IO ()
 delayMs ms = threadDelay $ ms * 1000
 
-
+majority :: [Peer] -> Int
+majority peers = if even n then 1 + quot n 2 else quot (n + 1) 2
+  where n = length $ peers

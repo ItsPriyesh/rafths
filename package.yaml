@@ -30,6 +30,8 @@ dependencies:
 - thrift >= 0.12.0
 - network
 - random
+- atomic-primops
+- hostname
 
 library:
   source-dirs: src
