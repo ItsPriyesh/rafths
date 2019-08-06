@@ -30,6 +30,8 @@ import ClusterNode
 import qualified ClusterNode_Client as Client
 import qualified Rafths_Types as T
 
+import ThriftConverter
+
 data Peer = Peer { host :: String, port :: Int } deriving (Eq, Show, Generic)
 instance Hashable Peer
 
@@ -92,10 +94,9 @@ start port peers = do
 
   -- spin up server on main thread
   print "Starting server..."
-  -- delayMs 100000000
-  -- _ <- runBasicServer hand ClusterNode.process port -- todo runThreadedServer
   _ <- runThreadedServer acceptor hand ClusterNode.process (PortNumber $ fromIntegral port)
   print "Server terminated!"
+
   where
     acceptor sock = do
       (h, _, _) <- (accept sock)
@@ -130,11 +131,6 @@ requestVoteHandler h req = do
   let p = getProps state
   pure $ newVoteResponse (currentTerm p) (shouldGrant p req)
 
-newVoteResponse :: Int64 -> Bool -> T.VoteResponse
-newVoteResponse term grant = T.VoteResponse { 
-  T.voteResponse_term = term, 
-  T.voteResponse_granted = grant
-}
 
 shouldGrant :: Props -> T.VoteRequest -> Bool
 shouldGrant p req = 
@@ -142,7 +138,7 @@ shouldGrant p req =
   else voted && localLast <= candidateLast
   where
     voted = maybe True (== T.voteRequest_candidateId req) (votedFor p)
-    localLast = (length $ logEntries $ p) - 1
+    localLast = (length $ logEntries p) - 1
     candidateLast = fromIntegral $ T.voteRequest_lastLogIndex req
 
 appendEntriesHandler :: NodeHand -> T.AppendRequest -> IO T.AppendResponse
@@ -153,11 +149,6 @@ appendEntriesHandler h req = do
   let p = getProps state
   pure $ newAppendResponse (currentTerm p) True
 
-newAppendResponse :: Int64 -> Bool -> T.AppendResponse
-newAppendResponse term success = T.AppendResponse { 
-  T.appendResponse_term = term, 
-  T.appendResponse_success = success 
-}
 
 -- shouldAppendEntries :: Props -> T.AppendRequest -> Bool
 -- shouldAppendEntries p req =
@@ -216,16 +207,8 @@ requestVoteFromPeer p peer = do
   c <- newThriftClient (host peer) (port peer)
   let lastLogIndex = (length $ logEntries $ p) - 1
   let lastLogTerm = if lastLogIndex >= 0 then term $ (logEntries p) !! lastLogIndex else 1
-  let req = newVoteRequest (self p) (currentTerm p) lastLogTerm lastLogIndex
+  let req = newVoteRequest (hash $ self p) (currentTerm p) lastLogTerm lastLogIndex
   Client.requestVote c req
-
-newVoteRequest :: Peer -> Int64 -> Int -> Int -> T.VoteRequest
-newVoteRequest candidate term lastLogTerm lastLogIndex = T.VoteRequest { 
-  T.voteRequest_candidateId = fromIntegral $ hash candidate,
-  T.voteRequest_term = term,
-  T.voteRequest_lastLogTerm = fromIntegral lastLogTerm,
-  T.voteRequest_lastLogIndex = fromIntegral lastLogIndex
-}
 
 randomElectionTimeout :: IO Int
 randomElectionTimeout = do
