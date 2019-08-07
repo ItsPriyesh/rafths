@@ -29,7 +29,9 @@ runServer h proc port = runThreadedServer acceptor h proc (PortNumber $ fromInte
 
 newThriftClient :: String -> Int -> IO (BinaryProtocol (FramedTransport Handle), BinaryProtocol (FramedTransport Handle))
 newThriftClient host port = do
+  print "opening"
   transport <- hOpen (host, PortNumber . fromIntegral $ port)
+  print "opened"
   framed <- openFramedTransport transport
   let proto = BinaryProtocol framed
   pure (proto, proto)
