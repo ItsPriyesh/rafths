@@ -1,6 +1,6 @@
 {-# LANGUAGE DeriveGeneric #-}
-
-module RaftNode where
+--(serve, NodeHand, Peer)
+module RaftNode  where
 
 import GHC.Generics (Generic)
 import GHC.Conc.Sync (ThreadId)
@@ -28,12 +28,27 @@ import qualified RaftNodeService_Client as Client
 import qualified Rafths_Types as T
 
 import ThriftUtil
+import KeyValueApi
 
 data Peer = Peer { host :: String, port :: Int } deriving (Eq, Show, Generic)
 
 instance Hashable Peer
 
 data NodeHand = NodeHand { peers :: [Peer], state :: MVar State, chan :: Chan Event, timer :: TimerIO }
+
+instance KeyValueStore NodeHand where
+  get h k = do -- todo
+    state <- getState h
+    pure Nothing
+
+  put h k v = pure () -- todo
+
+  isLeader h = fmap leads (getState h)
+    where leads (Leader _ _ _) = True
+          leads (Follower _) = False
+          leads (Candidate _) = False
+  
+  getLeader h = pure ("",0)
 
 data State = Follower Props 
            | Candidate Props 
@@ -69,20 +84,22 @@ getProps (Leader p _ _) = p
 
 restartElectionTimeout :: NodeHand -> IO ()
 restartElectionTimeout h = do
-  let ch = chan h
-  let t = timer h
   timeout <- randomElectionTimeout
   print $ "restarting election timeout " ++ show timeout
-  oneShotStart t (do 
-    _ <- forkIO $ do
-      print "timeout complete! writing ElectionTimeout event"
-      writeChan ch ElectionTimeout
-    pure ()) (msDelay timeout)
+  oneShotStart (timer h) (onComplete >>= const (pure ())) (msDelay timeout)
   pure ()
+  where
+    onComplete = forkIO $ do
+      print "timeout complete! writing ElectionTimeout event"
+      writeChan (chan h) ElectionTimeout
 
-serve :: PortNumber -> [Peer] -> IO ()
-serve port peers = do
-  hand <- newNodeHandler port peers
+heartbeatPeriodμs = 2 * 10^6
+
+serve :: PortNumber -> PortNumber -> [Peer] -> IO ()
+serve httpPort raftPort peers = do
+  hand <- newNodeHandler raftPort peers
+
+  forkIO $ serveHttpApi httpPort hand
 
   restartElectionTimeout hand
 
@@ -95,11 +112,24 @@ serve port peers = do
     print $ "--------------------------------"
     setState hand state'
 
-  -- start server and block main
-  print "Starting server..."
-  _ <- runServer hand RaftNodeService.process port
+  -- hearbeat thread, every couple seconds check the current state, if its a leader send heartbeats
+  forkIO $ forever $ do
+    threadDelay heartbeatPeriodμs
+    state <- getState hand
+    case state of (Leader p _ _) -> sendHeartbeats p peers
+
+  _ <- runServer hand RaftNodeService.process raftPort
   print "Server terminated!"
 
+sendHeartbeats :: Props -> [Peer] -> IO ()
+sendHeartbeats p peers = do
+    clients <- mapM (\a -> newThriftClient (host a) (port a)) (filter (/= self p) peers)
+    mapM_ (forkIO . heartbeat) clients
+    where
+      req = newHeartbeat (currentTerm p) (hash $ self p) (commitIndex p)
+      heartbeat c = do
+        response <- Client.appendEntries c req
+        pure ()
 
 newNodeHandler :: PortNumber -> [Peer] -> IO NodeHand
 newNodeHandler port peers = do
@@ -147,18 +177,19 @@ appendEntriesHandler h req = do
   writeChan (chan h) ReceivedAppend
   state <- getState h
   let p = getProps state
-  pure $ newAppendResponse (currentTerm p) True
+  pure $ newAppendResponse (currentTerm p) (shouldAppendEntries p req)
 
 
--- shouldAppendEntries :: Props -> T.AppendRequest -> Bool
--- shouldAppendEntries p req =
---   if currentTerm p > T.appendRequest_term req then False
---   else
---     let log = logEntries p
---     if T.appendRequest_prevLogIndex >= (length log - 1)) || ((term (log !! T.appendRequest_prevLogIndex)) != T.appendRequest_prevLogTerm) then False
---     else True
-
--- Create client RPC stub referencing another node in the cluster
+shouldAppendEntries :: Props -> T.AppendRequest -> Bool
+shouldAppendEntries p req =
+  if currentTerm p > T.appendRequest_term req then False
+  else
+    if prevLogIndex >= (length log - 1) || ((term (log !! prevLogIndex)) /= prevLogTerm) then False
+    else True
+  where
+    log = logEntries p
+    prevLogIndex = fromIntegral $ T.appendRequest_prevLogIndex req
+    prevLogTerm = fromIntegral $ T.appendRequest_prevLogTerm req
 
 handleEvent :: NodeHand -> State -> Event -> IO State
 handleEvent h (Follower p) ElectionTimeout = do
@@ -186,11 +217,10 @@ requestVotes h (Candidate p) = do
   print $ "checking election result for : " ++ show event
   electionResult event
 
-  where
-
+  where 
     getVote :: AtomicCounter -> Peer -> IO ()
     getVote count peer = do
-      vote <- requestVoteFromPeer p peer -- todo check that this fails after a short timeout 
+      vote <- requestVoteFromPeer p peer -- todo: timeout
       print $ "got requestVote response! " ++ show vote
       votes <- if T.voteResponse_granted vote then incrCounter 1 count else readCounter count
       if votes >= majority (peers h) then writeChan (chan h) ReceivedMajorityVote else pure ()

@@ -1,6 +1,8 @@
 module ThriftUtil where
 
 import Data.Int
+import Data.Text.Lazy
+import qualified Data.Vector as V
 
 import Thrift
 import Thrift.Server
@@ -38,7 +40,7 @@ newThriftClient host port = do
 
 newVoteRequest :: Int -> Int64 -> Int -> Int -> T.VoteRequest
 newVoteRequest candidate term lastLogTerm lastLogIndex = T.VoteRequest { 
-  T.voteRequest_candidateId = fromIntegral $ candidate,
+  T.voteRequest_candidateId = fromIntegral candidate,
   T.voteRequest_term = term,
   T.voteRequest_lastLogTerm = fromIntegral lastLogTerm,
   T.voteRequest_lastLogIndex = fromIntegral lastLogIndex
@@ -54,5 +56,21 @@ newAppendResponse :: Int64 -> Bool -> T.AppendResponse
 newAppendResponse term success = T.AppendResponse { 
   T.appendResponse_term = term, 
   T.appendResponse_success = success 
+}
+
+newHeartbeat :: Int64 -> Int -> Int32 -> T.AppendRequest
+newHeartbeat term leader leaderCommitIndex = T.AppendRequest { 
+  T.appendRequest_term = term,
+  T.appendRequest_leaderId = fromIntegral leader,
+  T.appendRequest_prevLogIndex = -1,
+  T.appendRequest_prevLogTerm = -1,
+  T.appendRequest_leaderCommitIndex = leaderCommitIndex,
+  T.appendRequest_entries = V.empty :: V.Vector T.LogEntry
+}
+
+newLogEntry :: String -> String -> Int64 -> T.LogEntry
+newLogEntry key value term = T.LogEntry {
+  T.logEntry_command = pack $ show key ++ "," ++ show value, -- handle delimiter issues
+  T.logEntry_term = term
 }
 
