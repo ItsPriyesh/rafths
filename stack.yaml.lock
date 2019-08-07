@@ -11,6 +11,13 @@ packages:
       sha256: efdc50637ec82ba927e215b0061d80338ea4da50d7bf46bfef76d2824a66d456
   original:
     hackage: thrift-0.12.0@sha256:1f97fad315d100b1dcc838e9b553d87634952f189804d1d5f23802cd123c21bd,2733
+- completed:
+    hackage: timers-updatable-0.2.0.2@sha256:8dc262bb1324c02eae4251f2b0f78109d1a6133754d5ae845778908abda43858,946
+    pantry-tree:
+      size: 295
+      sha256: 54f276f79be8ffff4aa0d3b290e3d9b3ebbb0feb5a2ec889a413ce92d235d042
+  original:
+    hackage: timers-updatable-0.2.0.2@sha256:8dc262bb1324c02eae4251f2b0f78109d1a6133754d5ae845778908abda43858,946
 snapshots:
 - completed:
     size: 500539

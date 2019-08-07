@@ -36,6 +36,7 @@ packages:
 #
 extra-deps:
   - thrift-0.12.0@sha256:1f97fad315d100b1dcc838e9b553d87634952f189804d1d5f23802cd123c21bd,2733
+  - timers-updatable-0.2.0.2@sha256:8dc262bb1324c02eae4251f2b0f78109d1a6133754d5ae845778908abda43858,946
 # - acme-missiles-0.3
 # - git: https://github.com/commercialhaskell/stack.git
 #   commit: e7b331f14bcffb8367cd58fbfc8b40ec7642100a

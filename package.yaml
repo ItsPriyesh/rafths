@@ -32,6 +32,7 @@ dependencies:
 - random
 - atomic-primops
 - hostname
+- timers-updatable
 
 library:
   source-dirs: src
