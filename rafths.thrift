@@ -29,7 +29,7 @@ struct LogEntry {
 	2: required i64 term
 }
 
-service ClusterNode {
+service RaftNodeService {
   VoteResponse requestVote(1: VoteRequest req);
   AppendResponse appendEntries(1: AppendRequest req);
 }

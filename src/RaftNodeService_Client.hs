@@ -13,7 +13,8 @@
 -- DO NOT EDIT UNLESS YOU ARE SURE YOU KNOW WHAT YOU ARE DOING --
 -----------------------------------------------------------------
 
-module ClusterNode_Iface where
+module RaftNodeService_Client(requestVote,appendEntries) where
+import qualified Data.IORef as R
 import Prelude (($), (.), (>>=), (==), (++))
 import qualified Prelude as P
 import qualified Control.Exception as X
@@ -39,7 +40,31 @@ import qualified Thrift.Arbitraries as T
 
 
 import Rafths_Types
-
-class ClusterNode_Iface a where
-  requestVote :: a -> VoteRequest -> P.IO VoteResponse
-  appendEntries :: a -> AppendRequest -> P.IO AppendResponse
+import RaftNodeService
+seqid = R.newIORef 0
+requestVote (ip,op) arg_req = do
+  send_requestVote op arg_req
+  recv_requestVote ip
+send_requestVote op arg_req = do
+  seq <- seqid
+  seqn <- R.readIORef seq
+  T.writeMessage op ("requestVote", T.M_CALL, seqn) $
+    write_RequestVote_args op (RequestVote_args{requestVote_args_req=arg_req})
+recv_requestVote ip = do
+  T.readMessage ip $ \(fname, mtype, rseqid) -> do
+    M.when (mtype == T.M_EXCEPTION) $ do { exn <- T.readAppExn ip ; X.throw exn }
+    res <- read_RequestVote_result ip
+    P.return $ requestVote_result_success res
+appendEntries (ip,op) arg_req = do
+  send_appendEntries op arg_req
+  recv_appendEntries ip
+send_appendEntries op arg_req = do
+  seq <- seqid
+  seqn <- R.readIORef seq
+  T.writeMessage op ("appendEntries", T.M_CALL, seqn) $
+    write_AppendEntries_args op (AppendEntries_args{appendEntries_args_req=arg_req})
+recv_appendEntries ip = do
+  T.readMessage ip $ \(fname, mtype, rseqid) -> do
+    M.when (mtype == T.M_EXCEPTION) $ do { exn <- T.readAppExn ip ; X.throw exn }
+    res <- read_AppendEntries_result ip
+    P.return $ appendEntries_result_success res

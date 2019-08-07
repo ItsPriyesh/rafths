@@ -13,7 +13,7 @@
 -- DO NOT EDIT UNLESS YOU ARE SURE YOU KNOW WHAT YOU ARE DOING --
 -----------------------------------------------------------------
 
-module ClusterNode where
+module RaftNodeService where
 import Prelude (($), (.), (>>=), (==), (++))
 import qualified Prelude as P
 import qualified Control.Exception as X
@@ -39,7 +39,7 @@ import qualified Thrift.Arbitraries as T
 
 
 import Rafths_Types
-import qualified ClusterNode_Iface as Iface
+import qualified RaftNodeService_Iface as Iface
 -- HELPER FUNCTIONS AND STRUCTURES --
 
 data RequestVote_args = RequestVote_args  { requestVote_args_req :: VoteRequest

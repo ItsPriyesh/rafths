@@ -21,9 +21,9 @@ import System.IO
 import System.Random
 import System.Timer.Updatable
 
-import ClusterNode_Iface
-import ClusterNode
-import qualified ClusterNode_Client as Client
+import RaftNodeService_Iface
+import RaftNodeService
+import qualified RaftNodeService_Client as Client
 import qualified Rafths_Types as T
 
 import ThriftUtil
@@ -68,56 +68,30 @@ getProps (Leader p _ _) = p
 
 serve :: PortNumber -> [Peer] -> IO ()
 serve port peers = do
-  
-  -- timeout <- randomElectionTimeout
-  -- print $ "waiting! election timeout = " ++ show timeout
-  -- timer <- parallel (writeChan (chan hand) ElectionTimeout) timeout
-
   hand <- newNodeHandler port peers
   
-  
-
-  -- forkIO $ do
-  --   timer <- parallel (writeChan $ chan hand) randomElectionTimeout
-  --   timeout <- randomElectionTimeout -- reset this timeout whenever we receive heartbeat from leader or granted vote to candidate
-  --   print $ "waiting! election timeout = " ++ show timeout
-  --   delayMs timeout
-  --   writeChan (chan hand) ElectionTimeout
-
-  -- read from channel on a new thread (blocks current thread)
   forkIO $ forever $ do
-    -- c <- chan hand
     event <- readChan $ chan hand
     state <- getState hand
     print $ "receive! " ++ show event ++ " state: " ++ show state
     state' <- handleEvent hand state event
     print $ "handled! state': " ++ show state'
     print $ "--------------------------------"
-
     setState hand state'
 
-  -- spin up server on main thread
+  -- start server and block main
   print "Starting server..."
-  -- _ <- runBasicServer hand ClusterNode.process port -- todo runThreadedServer
-  _ <- runServer hand ClusterNode.process port
+  _ <- runServer hand RaftNodeService.process port
   print "Server terminated!"
-
-  -- where
-  --   acceptor sock = do
-  --     (h, _, _) <- (accept sock)
-  --     t <- openFramedTransport h
-  --     return (BinaryProtocol t, BinaryProtocol t)
 
 newNodeHandler :: PortNumber -> [Peer] -> IO NodeHand
 newNodeHandler port peers = do
   host <- getHostName
   state <- newMVar $ Follower (newProps $ Peer host (fromIntegral $ port))
   chan <- newChan :: IO (Chan Event)
-
   timeout <- randomElectionTimeout
   print $ "waiting! election timeout = " ++ show timeout
   timer <- parallel (writeChan chan ElectionTimeout) timeout
-
   pure $ NodeHand peers state chan timer
 
 getState :: NodeHand -> IO State
@@ -129,7 +103,7 @@ setState h s = do
   modifyMVar_ mvar (const $ pure s)
 
 -- RPC Handlers
-instance ClusterNode_Iface NodeHand where
+instance RaftNodeService_Iface NodeHand where
   requestVote = requestVoteHandler
   appendEntries = appendEntriesHandler
 
@@ -141,7 +115,6 @@ requestVoteHandler h req = do
   let grant = shouldGrant p req
   if grant then restartElectionTimeout $ timer h else pure ()
   pure $ newVoteResponse (currentTerm p) grant
-
 
 shouldGrant :: Props -> T.VoteRequest -> Bool
 shouldGrant p req = 
@@ -175,7 +148,6 @@ appendEntriesHandler h req = do
 handleEvent :: NodeHand -> State -> Event -> IO State
 handleEvent h (Follower p) ElectionTimeout = do
   print "follower timed out! becoming candidate and starting election"
-  -- setState TODO set to candidate initially
   let state = newCandidate p
   setState h state
   requestVotes state (chan h) (timer h) (peers h)
@@ -189,20 +161,10 @@ newCandidate p = Candidate p { currentTerm = 1 + currentTerm p}
 
 requestVotes :: State -> Chan Event -> Updatable () -> [Peer] -> IO State
 requestVotes (Candidate p) ch timer peers = do
-  -- restart election timeout
   restartElectionTimeout timer
-  -- forkIO $ do
-    -- timeout <- randomElectionTimeout
-    -- delayMs timeout
-    -- writeChan ch ElectionTimeout
-
-  -- thread safe atomic counter for parallel vote RPCs
   voteCount <- newCounter 1
-
-  -- call requestVote RPC on each peer concurrently
   mapM_ (forkIO . getVote voteCount) (filter (/= self p) peers)
 
-  -- listen for a state transition event
   event <- readChan ch
   electionResult event
 
@@ -231,10 +193,6 @@ requestVoteFromPeer p peer = do
 randomElectionTimeout :: IO Int64
 randomElectionTimeout = randomRIO (t, 2 * t)
   where t = 5 * 10^6 -- 5s
-  
-
--- delayMs :: Int -> IO ()
--- delayMs ms = threadDelay $ ms * 1000
 
 restartElectionTimeout :: Updatable a -> IO ()
 restartElectionTimeout timer = do
