@@ -12,13 +12,6 @@ import Control.Concurrent.MVar
 import Control.Concurrent.Chan
 import Control.Concurrent (forkIO, threadDelay, myThreadId)
 import Control.Monad (forever)
-import Thrift
-import Thrift.Protocol
-import Thrift.Protocol.Binary
-import Thrift.Transport
-import Thrift.Transport.Handle
-import Thrift.Transport.Framed
-import Thrift.Server
 
 import Network
 import Network.HostName
@@ -30,9 +23,10 @@ import ClusterNode
 import qualified ClusterNode_Client as Client
 import qualified Rafths_Types as T
 
-import ThriftConverter
+import ThriftUtil
 
 data Peer = Peer { host :: String, port :: Int } deriving (Eq, Show, Generic)
+
 instance Hashable Peer
 
 data NodeHand = NodeHand { peers :: [Peer], state :: MVar State, chan :: Chan Event }
@@ -69,15 +63,13 @@ getProps (Follower p) = p
 getProps (Candidate p) = p
 getProps (Leader p _ _) = p
 
-start :: PortNumber -> [Peer] -> IO ()
-start port peers = do
+serve :: PortNumber -> [Peer] -> IO ()
+serve port peers = do
   hand <- newNodeHandler port peers
 
-  -- write to channel periodically on a new thread
-  forkIO $ forever $ do
-    -- c <- chan hand
-
+  forkIO $ do
     timeout <- randomElectionTimeout -- reset this timeout whenever we receive heartbeat from leader or granted vote to candidate
+    print $ "waiting! election timeout = " ++ show timeout
     delayMs timeout
     writeChan (chan hand) ElectionTimeout
 
@@ -86,23 +78,24 @@ start port peers = do
     -- c <- chan hand
     event <- readChan $ chan hand
     state <- getState hand
-    print "handling :"
-    print event
-    print state
-    newState <- handleEvent state event
-    setState hand newState
+    print $ "receive! " ++ show event ++ " state: " ++ show state
+    state' <- handleEvent hand state event
+    print $ "handled! state': " ++ show state'
+    print $ "--------------------------------"
+
+    setState hand state'
 
   -- spin up server on main thread
   print "Starting server..."
-  _ <- runThreadedServer acceptor hand ClusterNode.process (PortNumber $ fromIntegral port)
+  -- _ <- runBasicServer hand ClusterNode.process port -- todo runThreadedServer
+  _ <- runServer hand ClusterNode.process port
   print "Server terminated!"
 
-  where
-    acceptor sock = do
-      (h, _, _) <- (accept sock)
-      t <- openFramedTransport h
-      return (BinaryProtocol t, BinaryProtocol t)
-
+  -- where
+  --   acceptor sock = do
+  --     (h, _, _) <- (accept sock)
+  --     t <- openFramedTransport h
+  --     return (BinaryProtocol t, BinaryProtocol t)
 
 newNodeHandler :: PortNumber -> [Peer] -> IO NodeHand
 newNodeHandler port peers = do
@@ -159,17 +152,20 @@ appendEntriesHandler h req = do
 --     else True
 
 -- Create client RPC stub referencing another node in the cluster
-newThriftClient :: String -> Int -> IO (BinaryProtocol Handle, BinaryProtocol Handle)
-newThriftClient host port = do
-  transport <- hOpen (host, PortNumber . fromIntegral $ port)
-  let proto = BinaryProtocol transport
-  pure (proto, proto)
 
-handleEvent :: State -> Event -> IO State
-handleEvent (Follower p) ElectionTimeout = do
-  print "converting follower to candidate"
+handleEvent :: NodeHand -> State -> Event -> IO State
+handleEvent h (Follower p) ElectionTimeout = do
+  print "follower timed out! becoming candidate and starting election"
+  -- setState TODO set to candidate initially
+  let state = newCandidate p
+  setState h state
+  requestVotes (chan h) state (peers h)
+handleEvent h (Candidate p) ElectionTimeout = do
+  print "timed out during election! restarting election"
   pure $ newCandidate p
 
+-- Increments term and becomes Candidate
+newCandidate :: Props -> State
 newCandidate p = Candidate p { currentTerm = 1 + currentTerm p}
 
 requestVotes :: Chan Event -> State -> [Peer] -> IO State
@@ -201,13 +197,14 @@ requestVotes ch (Candidate p) peers = do
     electionResult ReceivedMajorityVote = pure $ Leader p [] [] -- todo init these arrays properly
     electionResult ReceivedAppend = pure $ Follower p
 
-
 requestVoteFromPeer :: Props -> Peer -> IO T.VoteResponse
 requestVoteFromPeer p peer = do
+  print $ "creating client to " ++ show peer
   c <- newThriftClient (host peer) (port peer)
   let lastLogIndex = (length $ logEntries $ p) - 1
   let lastLogTerm = if lastLogIndex >= 0 then term $ (logEntries p) !! lastLogIndex else 1
   let req = newVoteRequest (hash $ self p) (currentTerm p) lastLogTerm lastLogIndex
+  print $ "sending request " ++ show req
   Client.requestVote c req
 
 randomElectionTimeout :: IO Int
