@@ -1,5 +1,5 @@
 struct VoteRequest {
-	1: required i32 candidateId,
+	1: required string candidateId,
 	2: required i64 term,
 	3: required i64 lastLogTerm,
 	4: required i32 lastLogIndex
@@ -12,7 +12,7 @@ struct VoteResponse {
 
 struct AppendRequest {
 	1: required i64 term,
-  2: required i32 leaderId,
+  2: required string leaderId,
   3: required i32 prevLogIndex,
   4: required i64 prevLogTerm,
   5: required i32 leaderCommitIndex,

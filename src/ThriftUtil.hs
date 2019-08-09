@@ -31,20 +31,30 @@ runServer h proc port = runThreadedServer acceptor h proc (PortNumber $ fromInte
 
 newThriftClient :: String -> Int -> IO (BinaryProtocol (FramedTransport Handle), BinaryProtocol (FramedTransport Handle))
 newThriftClient host port = do
-  print "opening"
   transport <- hOpen (host, PortNumber . fromIntegral $ port)
-  print "opened"
   framed <- openFramedTransport transport
   let proto = BinaryProtocol framed
   pure (proto, proto)
 
-newVoteRequest :: Int -> Int64 -> Int -> Int -> T.VoteRequest
+newVoteRequest :: String -> Int64 -> Int -> Int -> T.VoteRequest
 newVoteRequest candidate term lastLogTerm lastLogIndex = T.VoteRequest { 
-  T.voteRequest_candidateId = fromIntegral candidate,
+  T.voteRequest_candidateId = pack candidate,
   T.voteRequest_term = term,
   T.voteRequest_lastLogTerm = fromIntegral lastLogTerm,
   T.voteRequest_lastLogIndex = fromIntegral lastLogIndex
 }
+
+candidateId :: T.VoteRequest -> String
+candidateId r = unpack $ T.voteRequest_candidateId r
+
+voteRequestTerm :: T.VoteRequest -> Int64
+voteRequestTerm r = T.voteRequest_term r
+
+requestLastLogTerm :: T.VoteRequest -> Int64
+requestLastLogTerm r = T.voteRequest_lastLogTerm r
+
+requestLastLogIndex :: T.VoteRequest -> Int32
+requestLastLogIndex r = T.voteRequest_lastLogIndex r
 
 newVoteResponse :: Int64 -> Bool -> T.VoteResponse
 newVoteResponse term grant = T.VoteResponse { 
@@ -58,19 +68,42 @@ newAppendResponse term success = T.AppendResponse {
   T.appendResponse_success = success 
 }
 
-newHeartbeat :: Int64 -> Int -> Int32 -> T.AppendRequest
+newHeartbeat :: Int64 -> String -> Int -> T.AppendRequest
 newHeartbeat term leader leaderCommitIndex = T.AppendRequest { 
   T.appendRequest_term = term,
-  T.appendRequest_leaderId = fromIntegral leader,
+  T.appendRequest_leaderId = pack leader,
   T.appendRequest_prevLogIndex = -1,
   T.appendRequest_prevLogTerm = -1,
-  T.appendRequest_leaderCommitIndex = leaderCommitIndex,
+  T.appendRequest_leaderCommitIndex = fromIntegral $ leaderCommitIndex,
   T.appendRequest_entries = V.empty :: V.Vector T.LogEntry
 }
 
-newLogEntry :: String -> String -> Int64 -> T.LogEntry
-newLogEntry key value term = T.LogEntry {
-  T.logEntry_command = pack $ show key ++ "," ++ show value, -- handle delimiter issues
+appendRequestTerm :: T.AppendRequest -> Int64
+appendRequestTerm r = T.appendRequest_term r
+
+leaderId :: T.AppendRequest -> String
+leaderId r = unpack $ T.appendRequest_leaderId r
+
+entries :: T.AppendRequest -> V.Vector T.LogEntry
+entries r = T.appendRequest_entries r
+
+prevLogTerm :: T.AppendRequest -> Int
+prevLogTerm r = fromIntegral $ T.appendRequest_prevLogTerm r
+
+prevLogIndex :: T.AppendRequest -> Int
+prevLogIndex r = fromIntegral $ T.appendRequest_prevLogIndex r
+
+leaderCommitIndex :: T.AppendRequest -> Int
+leaderCommitIndex r = fromIntegral $ T.appendRequest_leaderCommitIndex r
+
+newLogEntry :: (String, String) -> Int64 -> T.LogEntry
+newLogEntry entry term = T.LogEntry {
+  T.logEntry_command = pack $ show entry,
   T.logEntry_term = term
 }
 
+entryTerm :: T.LogEntry -> Int
+entryTerm e = fromIntegral $ T.logEntry_term e
+
+entryTuple :: T.LogEntry -> (String, String)
+entryTuple e = read $ unpack $ T.logEntry_command e

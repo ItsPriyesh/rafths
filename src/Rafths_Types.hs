@@ -38,7 +38,7 @@ import qualified Thrift.Types as T
 import qualified Thrift.Arbitraries as T
 
 
-data VoteRequest = VoteRequest  { voteRequest_candidateId :: I.Int32
+data VoteRequest = VoteRequest  { voteRequest_candidateId :: LT.Text
   , voteRequest_term :: I.Int64
   , voteRequest_lastLogTerm :: I.Int64
   , voteRequest_lastLogIndex :: I.Int32
@@ -59,7 +59,7 @@ instance QC.Arbitrary VoteRequest where
     ]
 from_VoteRequest :: VoteRequest -> T.ThriftVal
 from_VoteRequest record = T.TStruct $ Map.fromList $ M.catMaybes
-  [ (\_v2 -> P.Just (1, ("candidateId",T.TI32 _v2))) $ voteRequest_candidateId record
+  [ (\_v2 -> P.Just (1, ("candidateId",T.TString $ E.encodeUtf8 _v2))) $ voteRequest_candidateId record
   , (\_v2 -> P.Just (2, ("term",T.TI64 _v2))) $ voteRequest_term record
   , (\_v2 -> P.Just (3, ("lastLogTerm",T.TI64 _v2))) $ voteRequest_lastLogTerm record
   , (\_v2 -> P.Just (4, ("lastLogIndex",T.TI32 _v2))) $ voteRequest_lastLogIndex record
@@ -70,7 +70,7 @@ encode_VoteRequest :: T.StatelessProtocol p => p -> VoteRequest -> LBS.ByteStrin
 encode_VoteRequest oprot record = T.serializeVal oprot $ from_VoteRequest record
 to_VoteRequest :: T.ThriftVal -> VoteRequest
 to_VoteRequest (T.TStruct fields) = VoteRequest{
-  voteRequest_candidateId = P.maybe (P.error "Missing required field: candidateId") (\(_,_val4) -> (case _val4 of {T.TI32 _val5 -> _val5; _ -> P.error "wrong type"})) (Map.lookup (1) fields),
+  voteRequest_candidateId = P.maybe (P.error "Missing required field: candidateId") (\(_,_val4) -> (case _val4 of {T.TString _val5 -> E.decodeUtf8 _val5; _ -> P.error "wrong type"})) (Map.lookup (1) fields),
   voteRequest_term = P.maybe (P.error "Missing required field: term") (\(_,_val4) -> (case _val4 of {T.TI64 _val6 -> _val6; _ -> P.error "wrong type"})) (Map.lookup (2) fields),
   voteRequest_lastLogTerm = P.maybe (P.error "Missing required field: lastLogTerm") (\(_,_val4) -> (case _val4 of {T.TI64 _val7 -> _val7; _ -> P.error "wrong type"})) (Map.lookup (3) fields),
   voteRequest_lastLogIndex = P.maybe (P.error "Missing required field: lastLogIndex") (\(_,_val4) -> (case _val4 of {T.TI32 _val8 -> _val8; _ -> P.error "wrong type"})) (Map.lookup (4) fields)
@@ -81,10 +81,10 @@ read_VoteRequest iprot = to_VoteRequest <$> T.readVal iprot (T.T_STRUCT typemap_
 decode_VoteRequest :: T.StatelessProtocol p => p -> LBS.ByteString -> VoteRequest
 decode_VoteRequest iprot bs = to_VoteRequest $ T.deserializeVal iprot (T.T_STRUCT typemap_VoteRequest) bs
 typemap_VoteRequest :: T.TypeMap
-typemap_VoteRequest = Map.fromList [(1,("candidateId",T.T_I32)),(2,("term",T.T_I64)),(3,("lastLogTerm",T.T_I64)),(4,("lastLogIndex",T.T_I32))]
+typemap_VoteRequest = Map.fromList [(1,("candidateId",T.T_STRING)),(2,("term",T.T_I64)),(3,("lastLogTerm",T.T_I64)),(4,("lastLogIndex",T.T_I32))]
 default_VoteRequest :: VoteRequest
 default_VoteRequest = VoteRequest{
-  voteRequest_candidateId = 0,
+  voteRequest_candidateId = "",
   voteRequest_term = 0,
   voteRequest_lastLogTerm = 0,
   voteRequest_lastLogIndex = 0}
@@ -127,7 +127,7 @@ default_VoteResponse = VoteResponse{
   voteResponse_term = 0,
   voteResponse_granted = P.False}
 data AppendRequest = AppendRequest  { appendRequest_term :: I.Int64
-  , appendRequest_leaderId :: I.Int32
+  , appendRequest_leaderId :: LT.Text
   , appendRequest_prevLogIndex :: I.Int32
   , appendRequest_prevLogTerm :: I.Int64
   , appendRequest_leaderCommitIndex :: I.Int32
@@ -154,7 +154,7 @@ instance QC.Arbitrary AppendRequest where
 from_AppendRequest :: AppendRequest -> T.ThriftVal
 from_AppendRequest record = T.TStruct $ Map.fromList $ M.catMaybes
   [ (\_v18 -> P.Just (1, ("term",T.TI64 _v18))) $ appendRequest_term record
-  , (\_v18 -> P.Just (2, ("leaderId",T.TI32 _v18))) $ appendRequest_leaderId record
+  , (\_v18 -> P.Just (2, ("leaderId",T.TString $ E.encodeUtf8 _v18))) $ appendRequest_leaderId record
   , (\_v18 -> P.Just (3, ("prevLogIndex",T.TI32 _v18))) $ appendRequest_prevLogIndex record
   , (\_v18 -> P.Just (4, ("prevLogTerm",T.TI64 _v18))) $ appendRequest_prevLogTerm record
   , (\_v18 -> P.Just (5, ("leaderCommitIndex",T.TI32 _v18))) $ appendRequest_leaderCommitIndex record
@@ -167,7 +167,7 @@ encode_AppendRequest oprot record = T.serializeVal oprot $ from_AppendRequest re
 to_AppendRequest :: T.ThriftVal -> AppendRequest
 to_AppendRequest (T.TStruct fields) = AppendRequest{
   appendRequest_term = P.maybe (P.error "Missing required field: term") (\(_,_val22) -> (case _val22 of {T.TI64 _val23 -> _val23; _ -> P.error "wrong type"})) (Map.lookup (1) fields),
-  appendRequest_leaderId = P.maybe (P.error "Missing required field: leaderId") (\(_,_val22) -> (case _val22 of {T.TI32 _val24 -> _val24; _ -> P.error "wrong type"})) (Map.lookup (2) fields),
+  appendRequest_leaderId = P.maybe (P.error "Missing required field: leaderId") (\(_,_val22) -> (case _val22 of {T.TString _val24 -> E.decodeUtf8 _val24; _ -> P.error "wrong type"})) (Map.lookup (2) fields),
   appendRequest_prevLogIndex = P.maybe (P.error "Missing required field: prevLogIndex") (\(_,_val22) -> (case _val22 of {T.TI32 _val25 -> _val25; _ -> P.error "wrong type"})) (Map.lookup (3) fields),
   appendRequest_prevLogTerm = P.maybe (P.error "Missing required field: prevLogTerm") (\(_,_val22) -> (case _val22 of {T.TI64 _val26 -> _val26; _ -> P.error "wrong type"})) (Map.lookup (4) fields),
   appendRequest_leaderCommitIndex = P.maybe (P.error "Missing required field: leaderCommitIndex") (\(_,_val22) -> (case _val22 of {T.TI32 _val27 -> _val27; _ -> P.error "wrong type"})) (Map.lookup (5) fields),
@@ -179,11 +179,11 @@ read_AppendRequest iprot = to_AppendRequest <$> T.readVal iprot (T.T_STRUCT type
 decode_AppendRequest :: T.StatelessProtocol p => p -> LBS.ByteString -> AppendRequest
 decode_AppendRequest iprot bs = to_AppendRequest $ T.deserializeVal iprot (T.T_STRUCT typemap_AppendRequest) bs
 typemap_AppendRequest :: T.TypeMap
-typemap_AppendRequest = Map.fromList [(1,("term",T.T_I64)),(2,("leaderId",T.T_I32)),(3,("prevLogIndex",T.T_I32)),(4,("prevLogTerm",T.T_I64)),(5,("leaderCommitIndex",T.T_I32)),(6,("entries",(T.T_LIST (T.T_STRUCT typemap_LogEntry))))]
+typemap_AppendRequest = Map.fromList [(1,("term",T.T_I64)),(2,("leaderId",T.T_STRING)),(3,("prevLogIndex",T.T_I32)),(4,("prevLogTerm",T.T_I64)),(5,("leaderCommitIndex",T.T_I32)),(6,("entries",(T.T_LIST (T.T_STRUCT typemap_LogEntry))))]
 default_AppendRequest :: AppendRequest
 default_AppendRequest = AppendRequest{
   appendRequest_term = 0,
-  appendRequest_leaderId = 0,
+  appendRequest_leaderId = "",
   appendRequest_prevLogIndex = 0,
   appendRequest_prevLogTerm = 0,
   appendRequest_leaderCommitIndex = 0,

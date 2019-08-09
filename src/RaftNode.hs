@@ -1,6 +1,8 @@
 {-# LANGUAGE DeriveGeneric #-}
 --(serve, NodeHand, Peer)
-module RaftNode  where
+module RaftNode where
+
+import Prelude hiding (log)
 
 import GHC.Generics (Generic)
 import GHC.Conc.Sync (ThreadId)
@@ -8,6 +10,9 @@ import Data.Hashable
 import Data.Atomics.Counter
 import Data.Maybe
 import Data.Int
+
+import Data.List
+import qualified Data.Vector as V
 
 import Control.Concurrent.MVar
 import Control.Concurrent.Chan
@@ -28,11 +33,10 @@ import qualified RaftNodeService_Client as Client
 import qualified Rafths_Types as T
 
 import ThriftUtil
+import RaftLog
 import KeyValueApi
 
-data Peer = Peer { host :: String, port :: Int } deriving (Eq, Show, Generic)
-
-instance Hashable Peer
+data Peer = Peer { host :: String, port :: Int } deriving (Eq, Show, Read, Generic)
 
 data NodeHand = NodeHand { peers :: [Peer], state :: MVar State, chan :: Chan Event, timer :: TimerIO }
 
@@ -41,7 +45,10 @@ instance KeyValueStore NodeHand where
     state <- getState h
     pure Nothing
 
-  put h k v = pure () -- todo
+  put h k v = fmap updateLog (getState h)
+    where updateLog (Leader _ _ _) = True
+          updateLog (Follower _) = False -- todo otherwise syntax?
+          updateLog (Candidate _) = False
 
   isLeader h = fmap leads (getState h)
     where leads (Leader _ _ _) = True
@@ -58,29 +65,41 @@ data State = Follower Props
 nextIndex (Leader _ n _) = n
 matchIndex (Leader _ _ n) = n
 
+toFollower :: State -> State
+toFollower (Follower p) = Follower p
+toFollower (Candidate p) = Follower p
+toFollower (Leader p _ _) = Follower p
+
+-- TODO use lens
+getProps :: State -> Props
+getProps (Follower p) = p
+getProps (Candidate p) = p
+getProps (Leader p _ _) = p
+
+setProps :: State -> Props -> State
+setProps (Follower _) p  = Follower p
+setProps (Candidate _) p = Candidate p
+setProps (Leader _ n m) p =  Leader p n m
+
 data Event = ElectionTimeout -- whenever election timeout elapses without receiving heartbeat/grant vote
            | ReceivedMajorityVote -- candidate received majority, become leader
            | ReceivedAppend -- candidate contacted by leader during election, become follower
            deriving Show
 
-data LogEntry = LogEntry { keyVal :: (String, String), term :: Int } deriving Show
+
 
 data Props = Props {
   self :: Peer,
+  log :: Log,
   currentTerm :: Int64,
-  votedFor :: Maybe Int32,
-  logEntries :: [LogEntry],
-  commitIndex :: Int32,
-  lastApplied :: Int32
+  leader :: Maybe String,
+  votedFor :: Maybe String,
+  commitIndex :: Int,
+  lastApplied :: Int
 } deriving Show
 
 newProps :: Peer -> Props
-newProps self = Props self 0 Nothing [] 0 0
-
-getProps :: State -> Props
-getProps (Follower p) = p
-getProps (Candidate p) = p
-getProps (Leader p _ _) = p
+newProps self = Props self [] 0 Nothing Nothing 0 0
 
 restartElectionTimeout :: NodeHand -> IO ()
 restartElectionTimeout h = do
@@ -93,7 +112,7 @@ restartElectionTimeout h = do
       print "timeout complete! writing ElectionTimeout event"
       writeChan (chan h) ElectionTimeout
 
-heartbeatPeriodμs = 2 * 10^6
+heartbeatPeriodμs = 5 * 10^6
 
 serve :: PortNumber -> PortNumber -> [Peer] -> IO ()
 serve httpPort raftPort peers = do
@@ -106,17 +125,22 @@ serve httpPort raftPort peers = do
   forkIO $ forever $ do
     event <- readChan $ chan hand
     state <- getState hand
+    
     print $ "receive! " ++ show event ++ " state: " ++ show state
+    
     state' <- handleEvent hand state event
+    setState hand state'
+
     print $ "handled! state': " ++ show state'
     print $ "--------------------------------"
-    setState hand state'
 
   -- hearbeat thread, every couple seconds check the current state, if its a leader send heartbeats
   forkIO $ forever $ do
     threadDelay heartbeatPeriodμs
     state <- getState hand
+    print $ "heartbeat thread: state = " ++ show state
     case state of (Leader p _ _) -> sendHeartbeats p peers
+                  _ -> pure ()
 
   _ <- runServer hand RaftNodeService.process raftPort
   print "Server terminated!"
@@ -126,7 +150,7 @@ sendHeartbeats p peers = do
     clients <- mapM (\a -> newThriftClient (host a) (port a)) (filter (/= self p) peers)
     mapM_ (forkIO . heartbeat) clients
     where
-      req = newHeartbeat (currentTerm p) (hash $ self p) (commitIndex p)
+      req = newHeartbeat (currentTerm p) (show $ self p) (commitIndex p)
       heartbeat c = do
         response <- Client.appendEntries c req
         pure ()
@@ -143,9 +167,10 @@ getState :: NodeHand -> IO State
 getState h = readMVar . state $ h
 
 setState :: NodeHand -> State -> IO ()
-setState h s = do
-  let mvar = state h
-  modifyMVar_ mvar (const $ pure s)
+setState h s = modifyMVar_ (state h) (const $ pure s)
+
+setStateProps :: NodeHand -> State -> Props -> IO ()
+setStateProps h s p = setState h (setProps s p)
 
 -- RPC Handlers
 instance RaftNodeService_Iface NodeHand where
@@ -153,44 +178,58 @@ instance RaftNodeService_Iface NodeHand where
   appendEntries = appendEntriesHandler
 
 requestVoteHandler :: NodeHand -> T.VoteRequest -> IO T.VoteResponse
-requestVoteHandler h req = do
+requestVoteHandler h r = do
   print "RPC: requestVote()"
   state <- getState h
   let p = getProps state
-  let grant = shouldGrant p req
-  if grant then restartElectionTimeout h else pure ()
+  let grant = shouldGrant p r
+  if grant then do
+    restartElectionTimeout h
+    setStateProps h state p { votedFor = Just $ candidateId r }
+  else pure ()
   pure $ newVoteResponse (currentTerm p) grant
 
 shouldGrant :: Props -> T.VoteRequest -> Bool
-shouldGrant p req = 
-  if currentTerm p > T.voteRequest_term req then False
-  else voted && localLast <= candidateLast
-  where
-    voted = maybe True (== T.voteRequest_candidateId req) (votedFor p)
-    localLast = (length $ logEntries p) - 1
-    candidateLast = fromIntegral $ T.voteRequest_lastLogIndex req
+shouldGrant p r = 
+  if currentTerm p > voteRequestTerm r then False
+  else currentTerm p == voteRequestTerm r && 
+       requestLastLogTerm r >= (fromIntegral $ lastTerm $ log p) && 
+       requestLastLogIndex r >= (fromIntegral $ lastIndex $ log p) && 
+       maybe True (== candidateId r) (votedFor p)
 
 appendEntriesHandler :: NodeHand -> T.AppendRequest -> IO T.AppendResponse
-appendEntriesHandler h req = do
+appendEntriesHandler h r = do
   print "RPC: appendEntries()"
   restartElectionTimeout h
   writeChan (chan h) ReceivedAppend
   state <- getState h
   let p = getProps state
-  pure $ newAppendResponse (currentTerm p) (shouldAppendEntries p req)
-
-
-shouldAppendEntries :: Props -> T.AppendRequest -> Bool
-shouldAppendEntries p req =
-  if currentTerm p > T.appendRequest_term req then False
-  else
-    if prevLogIndex >= (length log - 1) || ((term (log !! prevLogIndex)) /= prevLogTerm) then False
-    else True
+  if currentTerm p > appendRequestTerm r then
+    pure $ newAppendResponse (currentTerm p) False
+  else do
+    let p' = p {
+      currentTerm = appendRequestTerm r,
+      votedFor = Nothing,
+      leader = Just $ leaderId r
+    }
+    if logMatch $ log p then do
+      let newLog = appendLog p' (entries r)
+      let localCommit = commitIndex p
+      let newCommit = if leaderCommit > localCommit then min leaderCommit (lastIndex newLog) 
+                      else localCommit 
+      setState h (Follower p' {
+        log = newLog,
+        commitIndex = newCommit
+      })
+      pure $ newAppendResponse (currentTerm p') True
+    else do
+      setState h (Follower p')
+      pure $ newAppendResponse (currentTerm p') False
   where
-    log = logEntries p
-    prevLogIndex = fromIntegral $ T.appendRequest_prevLogIndex req
-    prevLogTerm = fromIntegral $ T.appendRequest_prevLogTerm req
-
+    logMatch l = (prevLogIndex r) /= -1 && termMatchedAtIndex l (prevLogTerm r) (prevLogIndex r)
+    appendLog p entries = append (log p) (prevLogIndex r + 1) entries
+    leaderCommit = leaderCommitIndex r
+    
 handleEvent :: NodeHand -> State -> Event -> IO State
 handleEvent h (Follower p) ElectionTimeout = do
   print "follower timed out! becoming candidate and starting election"
@@ -233,9 +272,9 @@ requestVoteFromPeer :: Props -> Peer -> IO T.VoteResponse
 requestVoteFromPeer p peer = do
   print $ "creating client to " ++ show peer
   c <- newThriftClient (host peer) (port peer)
-  let lastLogIndex = (length $ logEntries $ p) - 1
-  let lastLogTerm = if lastLogIndex >= 0 then term $ (logEntries p) !! lastLogIndex else 1
-  let req = newVoteRequest (hash $ self p) (currentTerm p) lastLogTerm lastLogIndex
+  let lastLogIndex = lastIndex $ log p --(length $ logEntries $ p) - 1
+  let lastLogTerm = lastTerm $ log p --if lastLogIndex >= 0 then term $ (logEntries p) !! lastLogIndex else 1
+  let req = newVoteRequest (show $ self p) (currentTerm p) lastLogTerm lastLogIndex
   print $ "sending request " ++ show req
   Client.requestVote c req
 
