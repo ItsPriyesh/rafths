@@ -86,8 +86,6 @@ data Event = ElectionTimeout -- whenever election timeout elapses without receiv
            | ReceivedAppend -- candidate contacted by leader during election, become follower
            deriving Show
 
-
-
 data Props = Props {
   self :: Peer,
   log :: Log,
@@ -182,11 +180,17 @@ requestVoteHandler h r = do
   print "RPC: requestVote()"
   state <- getState h
   let p = getProps state
+  
+  if voteRequestTerm r > currentTerm p then
+    setState h (Follower p { currentTerm = voteRequestTerm r })
+  else pure ()
+
   let grant = shouldGrant p r
   if grant then do
     restartElectionTimeout h
     setStateProps h state p { votedFor = Just $ candidateId r }
   else pure ()
+  
   pure $ newVoteResponse (currentTerm p) grant
 
 shouldGrant :: Props -> T.VoteRequest -> Bool
@@ -206,7 +210,7 @@ appendEntriesHandler h r = do
   let p = getProps state
   if currentTerm p > appendRequestTerm r then
     pure $ newAppendResponse (currentTerm p) False
-  else do
+  else do -- update our term, become a follower, and accept entries from the leader
     let p' = p {
       currentTerm = appendRequestTerm r,
       votedFor = Nothing,
@@ -217,10 +221,7 @@ appendEntriesHandler h r = do
       let localCommit = commitIndex p
       let newCommit = if leaderCommit > localCommit then min leaderCommit (lastIndex newLog) 
                       else localCommit 
-      setState h (Follower p' {
-        log = newLog,
-        commitIndex = newCommit
-      })
+      setState h (Follower p' { log = newLog, commitIndex = newCommit })
       pure $ newAppendResponse (currentTerm p') True
     else do
       setState h (Follower p')
