@@ -42,28 +42,30 @@ data Peer = Peer { host :: String, port :: Int } deriving (Eq, Show, Read, Gener
 data NodeHand = NodeHand { peers :: [Peer], state :: MVar State, chan :: Chan Event, timer :: TimerIO }
 
 instance KeyValueStore NodeHand where
-  get h k = do
-    state <- getState h
-    let p = getProps state
-    let store = materialize (log p) (commitIndex p)
-    pure $ M.lookup k store
+  get h k = fmap getProps (getState h) >>= lookup
+    where
+      store p = materialize (log p) (commitIndex p)
+      lookup p = pure $ M.lookup k (store p)
 
-  put h k v = fmap updateLog (getState h)
-    where updateLog (Leader _ _ _) = True
-          updateLog (Follower _) = False -- todo otherwise syntax?
-          updateLog (Candidate _) = False
+  put h k v = getState h >>= update
+    where
+      update (Leader p n m) = do
+        setState h (Leader p { log = appendLocal (log p) (k, v) (currentTerm p) } n m)
+        -- TODO fire rpc to reps
+      update _ = pure ()
 
   isLeader h = fmap leads (getState h)
-    where leads (Leader _ _ _) = True
-          leads (Follower _) = False
-          leads (Candidate _) = False
+    where 
+      leads (Leader _ _ _) = True
+      leads _ = False
   
   getLeader h = fmap leader' (getState h)
-    where leader' (Leader p _ _) = Just $ tupled $ self p
-          leader' (Follower p) = tupledMaybe p
-          leader' (Candidate p) = tupledMaybe p
-          tupled p = (host p, port p)
-          tupledMaybe p = fmap (tupled . read) (leader p)
+    where 
+      leader' (Leader p _ _) = Just $ tupled $ self p
+      leader' (Follower p) = tupledMaybe p
+      leader' (Candidate p) = tupledMaybe p
+      tupled p = (host p, port p)
+      tupledMaybe p = fmap (tupled . read) (leader p)
 
 data State = Follower Props 
            | Candidate Props 
@@ -97,7 +99,7 @@ data Event = ElectionTimeout -- whenever election timeout elapses without receiv
 data Props = Props {
   self :: Peer,
   log :: Log,
-  currentTerm :: Int64,
+  currentTerm :: Int,
   leader :: Maybe String,
   votedFor :: Maybe String,
   commitIndex :: Int,

@@ -36,10 +36,10 @@ newThriftClient host port = do
   let proto = BinaryProtocol framed
   pure (proto, proto)
 
-newVoteRequest :: String -> Int64 -> Int -> Int -> T.VoteRequest
+newVoteRequest :: String -> Int -> Int -> Int -> T.VoteRequest
 newVoteRequest candidate term lastLogTerm lastLogIndex = T.VoteRequest { 
   T.voteRequest_candidateId = pack candidate,
-  T.voteRequest_term = term,
+  T.voteRequest_term = fromIntegral $ term,
   T.voteRequest_lastLogTerm = fromIntegral lastLogTerm,
   T.voteRequest_lastLogIndex = fromIntegral lastLogIndex
 }
@@ -47,8 +47,8 @@ newVoteRequest candidate term lastLogTerm lastLogIndex = T.VoteRequest {
 candidateId :: T.VoteRequest -> String
 candidateId r = unpack $ T.voteRequest_candidateId r
 
-voteRequestTerm :: T.VoteRequest -> Int64
-voteRequestTerm r = T.voteRequest_term r
+voteRequestTerm :: T.VoteRequest -> Int
+voteRequestTerm r = fromIntegral $ T.voteRequest_term r
 
 requestLastLogTerm :: T.VoteRequest -> Int64
 requestLastLogTerm r = T.voteRequest_lastLogTerm r
@@ -56,21 +56,21 @@ requestLastLogTerm r = T.voteRequest_lastLogTerm r
 requestLastLogIndex :: T.VoteRequest -> Int32
 requestLastLogIndex r = T.voteRequest_lastLogIndex r
 
-newVoteResponse :: Int64 -> Bool -> T.VoteResponse
+newVoteResponse :: Int -> Bool -> T.VoteResponse
 newVoteResponse term grant = T.VoteResponse { 
-  T.voteResponse_term = term, 
+  T.voteResponse_term = fromIntegral $ term, 
   T.voteResponse_granted = grant
 }
 
-newAppendResponse :: Int64 -> Bool -> T.AppendResponse
+newAppendResponse :: Int -> Bool -> T.AppendResponse
 newAppendResponse term success = T.AppendResponse { 
-  T.appendResponse_term = term, 
+  T.appendResponse_term = fromIntegral term, 
   T.appendResponse_success = success 
 }
 
-newHeartbeat :: Int64 -> String -> Int -> T.AppendRequest
+newHeartbeat :: Int -> String -> Int -> T.AppendRequest
 newHeartbeat term leader leaderCommitIndex = T.AppendRequest { 
-  T.appendRequest_term = term,
+  T.appendRequest_term = fromIntegral $ term,
   T.appendRequest_leaderId = pack leader,
   T.appendRequest_prevLogIndex = -1,
   T.appendRequest_prevLogTerm = -1,
@@ -78,8 +78,8 @@ newHeartbeat term leader leaderCommitIndex = T.AppendRequest {
   T.appendRequest_entries = V.empty :: V.Vector T.LogEntry
 }
 
-appendRequestTerm :: T.AppendRequest -> Int64
-appendRequestTerm r = T.appendRequest_term r
+appendRequestTerm :: T.AppendRequest -> Int
+appendRequestTerm r = fromIntegral $ T.appendRequest_term r
 
 leaderId :: T.AppendRequest -> String
 leaderId r = unpack $ T.appendRequest_leaderId r

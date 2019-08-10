@@ -7,10 +7,11 @@ import qualified Data.Map as M
 import qualified Data.Vector as V
 import qualified Rafths_Types as T
 
-data LogEntry = LogEntry { keyValue :: (String, String), term :: Int } deriving Show
-
 type Log = [LogEntry]
 
+data LogEntry = LogEntry { keyValue :: (String, String), term :: Int } deriving Show
+
+-- TODO: maintain last applied index and cache partial result
 materialize :: Log -> Int -> M.Map String String
 materialize l commit = M.fromList $ map keyValue (take (commit + 1) l)
 
@@ -34,6 +35,9 @@ append l startIndex entries =
     
     newEntry e = LogEntry (entryTuple e) (entryTerm e)
     entriesL = map newEntry (V.toList entries)
+
+appendLocal :: Log -> (String, String) -> Int -> Log
+appendLocal l (k, v) term = l ++ [LogEntry (k, v) term]
 
 termMatchedAtIndex :: Log -> Int -> Int -> Bool
 termMatchedAtIndex l t i = 
