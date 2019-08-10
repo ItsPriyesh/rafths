@@ -27,6 +27,7 @@ import Network.HostName
 
 import System.IO
 import System.Random
+import System.Timeout
 
 import RaftNodeService_Iface
 import RaftNodeService
@@ -187,7 +188,7 @@ instance RaftNodeService_Iface NodeHand where
 
 requestVoteHandler :: NodeHand -> T.VoteRequest -> IO T.VoteResponse
 requestVoteHandler h r = do
-  print "RPC: requestVote()"
+  print $ "RPC: requestVote() " ++ show r
   state <- getState h
   let p = getProps state
   
@@ -206,6 +207,7 @@ requestVoteHandler h r = do
 shouldGrant :: Props -> T.VoteRequest -> Bool
 shouldGrant p r = 
   if currentTerm p > voteRequestTerm r then False
+  else if currentTerm p < voteRequestTerm r then True
   else currentTerm p == voteRequestTerm r && 
        requestLastLogTerm r >= (fromIntegral $ lastTerm $ log p) && 
        requestLastLogIndex r >= (fromIntegral $ lastIndex $ log p) && 
@@ -213,7 +215,7 @@ shouldGrant p r =
 
 appendEntriesHandler :: NodeHand -> T.AppendRequest -> IO T.AppendResponse
 appendEntriesHandler h r = do
-  print "RPC: appendEntries()"
+  print $ "RPC: appendEntries() size = " ++ show (length $ entries r)
   restartElectionTimeout h
   writeChan (chan h) ReceivedAppend
   state <- getState h
@@ -250,6 +252,7 @@ handleEvent h (Follower p) ElectionTimeout = do
 handleEvent h (Candidate p) ElectionTimeout = do
   print "timed out during election! restarting election"
   pure $ newCandidate p
+handleEvent h (Leader p n m) ElectionTimeout = pure $ Leader p n m
 
 -- Increments term and becomes Candidate
 newCandidate :: Props -> State
