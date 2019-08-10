@@ -12,6 +12,7 @@ import Data.Maybe
 import Data.Int
 
 import Data.List
+import qualified Data.Map as M
 import qualified Data.Vector as V
 
 import Control.Concurrent.MVar
@@ -41,9 +42,11 @@ data Peer = Peer { host :: String, port :: Int } deriving (Eq, Show, Read, Gener
 data NodeHand = NodeHand { peers :: [Peer], state :: MVar State, chan :: Chan Event, timer :: TimerIO }
 
 instance KeyValueStore NodeHand where
-  get h k = do -- todo
+  get h k = do
     state <- getState h
-    pure Nothing
+    let p = getProps state
+    let store = materialize (log p) (commitIndex p)
+    pure $ M.lookup k store
 
   put h k v = fmap updateLog (getState h)
     where updateLog (Leader _ _ _) = True
