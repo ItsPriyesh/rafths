@@ -55,7 +55,12 @@ instance KeyValueStore NodeHand where
           leads (Follower _) = False
           leads (Candidate _) = False
   
-  getLeader h = pure ("",0)
+  getLeader h = fmap leader' (getState h)
+    where leader' (Leader p _ _) = Just $ tupled $ self p
+          leader' (Follower p) = tupledMaybe p
+          leader' (Candidate p) = tupledMaybe p
+          tupled p = (host p, port p)
+          tupledMaybe p = fmap (tupled . read) (leader p)
 
 data State = Follower Props 
            | Candidate Props 

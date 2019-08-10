@@ -7,7 +7,7 @@ import Network
 
 class KeyValueStore s where
   isLeader :: s -> IO Bool
-  getLeader :: s -> IO (String, Int)
+  getLeader :: s -> IO (Maybe (String, Int))
   get :: s -> String -> IO (Maybe String)
   put :: s -> String -> String -> IO Bool
 
