@@ -36,7 +36,9 @@ dependencies:
 - suspend
 
 library:
-  source-dirs: src
+  source-dirs: 
+    - src
+    - gen-hs
 
 executables:
   rafths-exe:
