@@ -1,7 +1,7 @@
 module RaftLog where
 
 import Data.List
-import ThriftUtil
+import ThriftTypeConverter
 
 import qualified Data.Map as M
 import qualified Data.Vector as V

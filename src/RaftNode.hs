@@ -3,40 +3,41 @@
 module RaftNode where
 
 import Prelude hiding (log)
-
 import GHC.Generics (Generic)
 import GHC.Conc.Sync (ThreadId)
 import Data.Hashable
 import Data.Atomics.Counter
 import Data.Maybe
 import Data.Int
-
 import Data.List
 import qualified Data.Map as M
 import qualified Data.Vector as V
-
 import Control.Concurrent.MVar
 import Control.Concurrent.Chan
 import Control.Concurrent.Timer
 import Control.Concurrent.Suspend.Lifted
 import Control.Concurrent (forkIO, threadDelay, myThreadId)
 import Control.Monad (forever)
-
+import Thrift
+import Thrift.Server
+import Thrift.Protocol
+import Thrift.Protocol.Binary
+import Thrift.Transport
+import Thrift.Transport.Handle
+import Thrift.Transport.Framed
 import Network
 import Network.HostName
-
 import System.IO
 import System.Random
 import System.Timeout
-
 import RaftNodeService_Iface
 import RaftNodeService
 import qualified RaftNodeService_Client as Client
 import qualified Rafths_Types as T
 
-import ThriftUtil
 import RaftLog
 import KeyValueApi
+import ThriftTypeConverter
 
 data Peer = Peer { host :: String, port :: Int } deriving (Eq, Show, Read, Generic)
 
@@ -114,14 +115,15 @@ restartElectionTimeout :: NodeHand -> IO ()
 restartElectionTimeout h = do
   timeout <- randomElectionTimeout
   print $ "restarting election timeout " ++ show timeout
-  oneShotStart (timer h) (onComplete >>= const (pure ())) (msDelay timeout)
+  oneShotStart (timer h) (onComplete >>= const (pure ())) (usDelay timeout)
   pure ()
   where
     onComplete = forkIO $ do
       print "timeout complete! writing ElectionTimeout event"
       writeChan (chan h) ElectionTimeout
 
-heartbeatPeriodμs = 5 * 10^6
+heartbeatPeriodμs = 5 * 10^6 -- 5s
+clientConnectionTimeoutμs = 2 * 10^5 -- 200ms
 
 serve :: PortNumber -> PortNumber -> [Peer] -> IO ()
 serve httpPort raftPort peers = do
@@ -156,8 +158,9 @@ serve httpPort raftPort peers = do
 
 sendHeartbeats :: Props -> [Peer] -> IO ()
 sendHeartbeats p peers = do
-    clients <- mapM (\a -> newThriftClient (host a) (port a)) (filter (/= self p) peers)
-    mapM_ (forkIO . heartbeat) clients
+    clients <- mapM (\a -> newThriftClient (host a) (port a)) (filter (/= self p) peers) -- uncurry?
+    print $ "made clients: "
+    mapM_ (forkIO . heartbeat) (catMaybes clients)
     where
       req = newHeartbeat (currentTerm p) (show $ self p) (commitIndex p)
       heartbeat c = do
@@ -171,6 +174,20 @@ newNodeHandler port peers = do
   chan <- newChan :: IO (Chan Event)
   timer <- newTimer
   pure $ NodeHand peers state chan timer
+
+type ThriftP = BinaryProtocol (FramedTransport Handle)
+type ThriftC = (ThriftP, ThriftP)
+
+newThriftClient :: String -> Int -> IO (Maybe ThriftC)
+newThriftClient host port = do
+  print "hopening" -- TODO: failure during connection causes this thread to hang (timout not working)
+  transport <- timeout clientConnectionTimeoutμs (hOpen (host, PortNumber . fromIntegral $ port))
+  print "hopened"
+  case transport of
+    Just t -> fmap (\p -> Just (p, p)) (frame t)
+    Nothing -> pure Nothing
+  where
+    frame t = fmap BinaryProtocol (openFramedTransport t)
 
 getState :: NodeHand -> IO State
 getState h = readMVar . state $ h
@@ -253,6 +270,8 @@ handleEvent h (Candidate p) ElectionTimeout = do
   print "timed out during election! restarting election"
   pure $ newCandidate p
 handleEvent h (Leader p n m) ElectionTimeout = pure $ Leader p n m
+handleEvent h (Candidate p) ReceivedAppend = pure $ Follower p
+handleEvent _ s _ = pure s
 
 -- Increments term and becomes Candidate
 newCandidate :: Props -> State
@@ -260,41 +279,51 @@ newCandidate p = Candidate p { currentTerm = 1 + currentTerm p}
 
 requestVotes :: NodeHand -> State -> IO State
 requestVotes h (Candidate p) = do
-  restartElectionTimeout h
-  print "making vote counter"
-  voteCount <- newCounter 1
-  mapM_ (forkIO . getVote voteCount) (filter (/= self p) (peers h))
+  print "starting election"
 
-  ch <- dupChan $ chan h
-  event <- readChan $ ch
-  print $ "checking election result for : " ++ show event
-  electionResult event
+  t <- fmap fromIntegral randomElectionTimeout
+  res <- timeout t startElection
+  
+  print $ "election result = " ++ show res
+  case res of Just True -> pure $ Leader p [] []
+              _ -> requestVotes h (Candidate p) -- timed out
+  where
+    startElection :: IO Bool
+    startElection = do
+      elect <- newEmptyMVar
+      voteCount <- newCounter 1
+      mapM_ (forkIO . getVote voteCount elect) (filter (/= self p) (peers h))
+      takeMVar elect
 
-  where 
-    getVote :: AtomicCounter -> Peer -> IO ()
-    getVote count peer = do
+    getVote :: AtomicCounter -> MVar Bool -> Peer -> IO ()
+    getVote count elect peer = do
       vote <- requestVoteFromPeer p peer -- todo: timeout
-      print $ "got requestVote response! " ++ show vote
-      votes <- if T.voteResponse_granted vote then incrCounter 1 count else readCounter count
-      if votes >= majority (peers h) then writeChan (chan h) ReceivedMajorityVote else pure ()
+      case vote of 
+        Just v -> do
+          print $ "got requestVote response! " ++ show v
+          votes <- if T.voteResponse_granted v then incrCounter 1 count else readCounter count
+          if votes >= majority (peers h) then putMVar elect True else pure ()
+        _ -> pure ()
 
     electionResult ElectionTimeout = requestVotes h (Candidate p) -- stay in same state, start new election
     electionResult ReceivedMajorityVote = pure $ Leader p [] [] -- todo init these arrays properly
     electionResult ReceivedAppend = pure $ Follower p
 
-requestVoteFromPeer :: Props -> Peer -> IO T.VoteResponse
+requestVoteFromPeer :: Props -> Peer -> IO (Maybe T.VoteResponse)
 requestVoteFromPeer p peer = do
   print $ "creating client to " ++ show peer
-  c <- newThriftClient (host peer) (port peer)
-  let lastLogIndex = lastIndex $ log p --(length $ logEntries $ p) - 1
-  let lastLogTerm = lastTerm $ log p --if lastLogIndex >= 0 then term $ (logEntries p) !! lastLogIndex else 1
+  client <- newThriftClient (host peer) (port peer)
+  let lastLogIndex = lastIndex $ log p
+  let lastLogTerm = lastTerm $ log p
   let req = newVoteRequest (show $ self p) (currentTerm p) lastLogTerm lastLogIndex
   print $ "sending request " ++ show req
-  Client.requestVote c req
+  case client of
+    Just c -> fmap Just (Client.requestVote c req)
+    _ -> pure Nothing
 
 randomElectionTimeout :: IO Int64
 randomElectionTimeout = randomRIO (t, 2 * t)
-  where t = (5 * 10^3) -- 5s
+  where t = (5 * 10^6) -- 5s
 
 majority :: [Peer] -> Int
 majority peers = if even n then 1 + quot n 2 else quot (n + 1) 2

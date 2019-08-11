@@ -1,4 +1,4 @@
-module ThriftUtil where
+module ThriftTypeConverter where
 
 import Data.Int
 import Data.Text.Lazy
@@ -29,12 +29,6 @@ runServer h proc port = runThreadedServer acceptor h proc (PortNumber $ fromInte
       t <- openFramedTransport h
       return (BinaryProtocol t, BinaryProtocol t)
 
-newThriftClient :: String -> Int -> IO (BinaryProtocol (FramedTransport Handle), BinaryProtocol (FramedTransport Handle))
-newThriftClient host port = do
-  transport <- hOpen (host, PortNumber . fromIntegral $ port)
-  framed <- openFramedTransport transport
-  let proto = BinaryProtocol framed
-  pure (proto, proto)
 
 newVoteRequest :: String -> Int -> Int -> Int -> T.VoteRequest
 newVoteRequest candidate term lastLogTerm lastLogIndex = T.VoteRequest { 
