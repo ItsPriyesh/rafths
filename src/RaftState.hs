@@ -12,12 +12,17 @@ data State = Follower  Props
 
 data Peer = Peer { 
   host :: String, 
-  port :: Int 
+  port :: Int,
+  nextIndex :: Int,
+  matchIndex :: Int
 } deriving (Eq, Show, Read, Generic)
+
+newPeer :: String -> Int -> Peer
+newPeer h p = Peer h p 0 0
 
 majority :: [Peer] -> Int
 majority peers = if even n then 1 + quot n 2 else quot (n + 1) 2
-  where n = length $ peers
+  where n = length peers + 1
 
 data Props = Props {
   self :: Peer,
@@ -32,8 +37,8 @@ data Props = Props {
 newProps :: Peer -> Props
 newProps self = Props self [] 0 Nothing Nothing 0 0
 
-nextIndex (Leader _ n _) = n
-matchIndex (Leader _ _ n) = n
+-- nextIndex (Leader _ n _) = n
+-- matchIndex (Leader _ _ n) = n
 
 toFollower :: State -> State
 toFollower (Follower p) = Follower p

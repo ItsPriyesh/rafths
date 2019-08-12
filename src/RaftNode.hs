@@ -68,16 +68,17 @@ instance KeyValueStore NodeHand where
       tupled p = (host p, port p)
       tupledMaybe p = fmap (tupled . read) (leader p)
 
-propagateEntry :: (String, String) -> IO ()
-propagateEntry (k, v) = 
+-- propagateEntry :: (String, String) -> IO ()
+-- propagateEntry (k, v) = 
 
 newNodeHandler :: PortNumber -> [Peer] -> IO NodeHand
 newNodeHandler port peers = do
   host <- getHostName
-  state <- newMVar $ Follower $ newProps $ Peer host $ fromIntegral $ port
+  let self = newPeer host (fromIntegral port)
+  state <- newMVar $ Follower $ newProps self
   chan <- newChan :: IO (Chan Event)
   timer <- newTimer
-  pure $ NodeHand state chan timer peers
+  pure $ NodeHand state chan timer $ filter (/= self) peers
 
 getState :: NodeHand -> IO State
 getState h = readMVar . state $ h
@@ -192,7 +193,7 @@ heartbeatPeriodμs = 5 * 10^6 -- 5s
 
 sendHeartbeats :: Props -> [Peer] -> IO ()
 sendHeartbeats p peers = do
-  clients <- mapM newTClient (filter (/= self p) peers)
+  clients <- mapM newTClient peers
   mapM_ (forkIO . heartbeat) (catMaybes clients)
   where
     req = newHeartbeat (currentTerm p) (show $ self p) (commitIndex p)
@@ -215,7 +216,7 @@ startElection h (Candidate p) = do
     poll = do
       elect <- newEmptyMVar
       voteCount <- newCounter 1
-      mapM_ (forkIO . getVote voteCount elect) $ filter (/= self p) (peers h)
+      mapM_ (forkIO . getVote voteCount elect) $ peers h
       takeMVar elect
 
     getVote :: AtomicCounter -> MVar Bool -> Peer -> IO ()
