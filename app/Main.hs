@@ -3,6 +3,7 @@ module Main where
 import System.Environment   
 
 import RaftNode
+import RaftState
 
 main :: IO ()
 main = do

@@ -48,4 +48,3 @@ termConflictAtIndex :: Log -> Int -> Int -> Bool
 termConflictAtIndex l t i = 
   if null l || i > lastIndex l then False
   else term (l !! i) /= t
-
