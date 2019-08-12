@@ -16,7 +16,7 @@ import Control.Concurrent.MVar
 import Control.Concurrent.Chan
 import Control.Concurrent.Timer
 import Control.Concurrent.Suspend.Lifted
-import Control.Concurrent (forkIO, threadDelay, myThreadId)
+import Control.Concurrent (forkIO, threadDelay)
 import Control.Monad (forever, when)
 import Thrift
 import Thrift.Server
@@ -42,43 +42,44 @@ instance RaftNodeService_Iface NodeHand where
   requestVote = requestVoteHandler
   appendEntries = appendEntriesHandler
 
+-- Key-Value store interface
 instance KeyValueStore NodeHand where
   get h k = fmap getProps (getState h) >>= lookup
     where
       store p = materialize (log p) (commitIndex p)
-      lookup p = pure $ M.lookup k (store p)
+      lookup p = pure $ M.lookup k $ store p
 
   put h k v = getState h >>= update
     where
-      update (Leader p n m) = do
-        setState h $ Leader p { log = appendLocal (log p) (k, v) (currentTerm p) } n m
+      update (Leader p i) = do
+        setState h $ Leader p { log = appendLocal (log p) (k, v) (currentTerm p) } i
         -- TODO fire rpc to reps
       update _ = pure ()
 
   isLeader h = fmap leads $ getState h
     where 
-      leads (Leader _ _ _) = True
+      leads (Leader _ _) = True
       leads _ = False
   
   getLeader h = fmap leader' $ getState h
     where 
-      leader' (Leader p _ _) = Just $ tupled $ self p
+      leader' (Leader p _) = Just $ tupled $ self p
       leader' (Follower p) = tupledMaybe p
       leader' (Candidate p) = tupledMaybe p
       tupled p = (host p, port p)
       tupledMaybe p = fmap (tupled . read) (leader p)
 
--- propagateEntry :: (String, String) -> IO ()
--- propagateEntry (k, v) = 
+propagateEntry :: (String, String) -> IO ()
+propagateEntry (k, v) = pure ()
 
 newNodeHandler :: PortNumber -> [Peer] -> IO NodeHand
-newNodeHandler port peers = do
+newNodeHandler port cluster = do
   host <- getHostName
-  let self = newPeer host (fromIntegral port)
+  let self = Peer host (fromIntegral port)
   state <- newMVar $ Follower $ newProps self
   chan <- newChan :: IO (Chan Event)
   timer <- newTimer
-  pure $ NodeHand state chan timer $ filter (/= self) peers
+  pure $ NodeHand state chan timer $ filter (/= self) cluster
 
 getState :: NodeHand -> IO State
 getState h = readMVar . state $ h
@@ -90,8 +91,8 @@ setStateProps :: NodeHand -> State -> Props -> IO ()
 setStateProps h s p = setState h $ setProps s p
 
 serve :: PortNumber -> PortNumber -> [Peer] -> IO ()
-serve httpPort raftPort peers = do
-  hand <- newNodeHandler raftPort peers
+serve httpPort raftPort cluster = do
+  hand <- newNodeHandler raftPort cluster
   forkIO $ serveHttpApi httpPort hand
   restartElectionTimeout hand
 
@@ -108,16 +109,13 @@ serve httpPort raftPort peers = do
     threadDelay heartbeatPeriodμs
     state <- getState hand
     print $ "heartbeat thread: state = " ++ show state
-    case state of (Leader p _ _) -> sendHeartbeats p peers
+    case state of (Leader p _) -> sendHeartbeats p (peers hand)
                   _ -> pure ()
 
   _ <- runServer hand RaftNodeService.process raftPort
-  print "server terminated!"
+  print "server terminated"
 
-data Event = ElectionTimeout -- whenever election timeout elapses without receiving heartbeat/grant vote
-           | ReceivedMajorityVote -- candidate received majority, become leader
-           | ReceivedAppend -- candidate contacted by leader during election, become follower
-           deriving Show
+data Event = ElectionTimeout | ReceivedAppend deriving Show
 
 handleEvent :: NodeHand -> State -> Event -> IO State
 handleEvent h (Follower p) ElectionTimeout = do
@@ -127,8 +125,10 @@ handleEvent h (Follower p) ElectionTimeout = do
   startElection h state
 handleEvent h (Candidate p) ElectionTimeout = do
   print "timed out during election! restarting election"
-  pure $ newCandidate p
-handleEvent h (Leader p n m) ElectionTimeout = pure $ Leader p n m
+  let state = newCandidate p
+  setState h state
+  startElection h state
+handleEvent h (Leader p i) ElectionTimeout = pure $ Leader p i
 handleEvent h (Candidate p) ReceivedAppend = pure $ Follower p
 handleEvent _ s _ = pure s
 
@@ -150,7 +150,7 @@ requestVoteHandler h r = do
 
 appendEntriesHandler :: NodeHand -> T.AppendRequest -> IO T.AppendResponse
 appendEntriesHandler h r = do
-  print $ "RPC: appendEntries() size = " ++ show (length $ entries r)
+  print $ "RPC: appendEntries() " ++ show r
   restartElectionTimeout h
   writeChan (chan h) ReceivedAppend
   state <- getState h
@@ -196,7 +196,7 @@ sendHeartbeats p peers = do
   clients <- mapM newTClient peers
   mapM_ (forkIO . heartbeat) (catMaybes clients)
   where
-    req = newHeartbeat (currentTerm p) (show $ self p) (commitIndex p)
+    req = newHeartbeat (currentTerm p) (show $ self p) (commitIndex p) (lastIndex $ log p) (lastTerm $ log p)
     heartbeat c = do
       response <- Client.appendEntries c req
       pure ()
@@ -204,13 +204,11 @@ sendHeartbeats p peers = do
 startElection :: NodeHand -> State -> IO State
 startElection h (Candidate p) = do
   print "starting election"
-
-  t <- fmap fromIntegral randomElectionTimeout
-  res <- timeout t poll
-  
+  electionTimeout <- fmap fromIntegral randomElectionTimeout
+  res <- timeout electionTimeout poll
   print $ "election result = " ++ show res
-  case res of Just True -> pure $ Leader p [] []  -- todo init these arrays properly
-              _ -> startElection h $ newCandidate p -- timed out, new election
+  case res of Just True -> pure $ newLeader p $ peers h
+              _ -> fmap (const $ Candidate p) $ writeChan (chan h) ElectionTimeout
   where
     poll :: IO Bool
     poll = do
@@ -221,10 +219,10 @@ startElection h (Candidate p) = do
 
     getVote :: AtomicCounter -> MVar Bool -> Peer -> IO ()
     getVote count elect peer = do
-      vote <- requestVoteFromPeer p peer -- todo: timeout
+      vote <- requestVoteFromPeer p peer
       case vote of 
         Just v -> do
-          print $ "got requestVote response! " ++ show v
+          print $ "got requestVote response " ++ show v
           votes <- if T.voteResponse_granted v then incrCounter 1 count else readCounter count
           when (votes >= majority (peers h)) $ putMVar elect True
         _ -> pure ()

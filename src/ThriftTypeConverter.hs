@@ -62,14 +62,18 @@ newAppendResponse term success = T.AppendResponse {
   T.appendResponse_success = success 
 }
 
-newHeartbeat :: Int -> String -> Int -> T.AppendRequest
-newHeartbeat term leader leaderCommitIndex = T.AppendRequest { 
-  T.appendRequest_term = fromIntegral $ term,
+newHeartbeat :: Int -> String -> Int -> Int -> Int -> T.AppendRequest
+newHeartbeat term leader leaderCommitIndex prevLogIndex prevLogTerm = 
+  newAppendRequest term leader leaderCommitIndex prevLogIndex prevLogTerm (V.empty :: V.Vector T.LogEntry)
+
+newAppendRequest :: Int -> String -> Int -> Int -> Int -> V.Vector T.LogEntry -> T.AppendRequest
+newAppendRequest term leader leaderCommitIndex prevLogIndex prevLogTerm entries = T.AppendRequest { 
+  T.appendRequest_term = fromIntegral term,
   T.appendRequest_leaderId = pack leader,
-  T.appendRequest_prevLogIndex = -1,
-  T.appendRequest_prevLogTerm = -1,
-  T.appendRequest_leaderCommitIndex = fromIntegral $ leaderCommitIndex,
-  T.appendRequest_entries = V.empty :: V.Vector T.LogEntry
+  T.appendRequest_prevLogIndex = fromIntegral prevLogIndex,
+  T.appendRequest_prevLogTerm = fromIntegral prevLogTerm,
+  T.appendRequest_leaderCommitIndex = fromIntegral leaderCommitIndex,
+  T.appendRequest_entries = entries
 }
 
 appendRequestTerm :: T.AppendRequest -> Int

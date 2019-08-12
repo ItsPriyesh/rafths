@@ -9,5 +9,5 @@ main :: IO ()
 main = do
   args <- getArgs
   let port = read $ args !! 0
-  let raftPort = read $ args !! 1
-  RaftNode.serve port raftPort [newPeer "Priyeshs-MacBook-Pro.local" 8022, newPeer "Priyeshs-MacBook-Pro.local" 8023]
+  let rpcPort = read $ args !! 1
+  RaftNode.serve port rpcPort [Peer "Priyeshs-MacBook-Pro.local" 8022, Peer "Priyeshs-MacBook-Pro.local" 8023]

@@ -27,5 +27,5 @@ newTClient peer = do
     frame t = fmap BinaryProtocol (openFramedTransport t)
 
 connect :: Peer -> IO (Maybe Handle)
-connect (Peer h p _ _) = catch (fmap Just open) (\(e :: SomeException) -> pure Nothing)
+connect (Peer h p) = catch (fmap Just open) (\(e :: SomeException) -> pure Nothing)
   where open = hOpen (h, PortNumber . fromIntegral $ p)
