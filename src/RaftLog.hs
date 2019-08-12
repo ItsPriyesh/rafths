@@ -19,7 +19,10 @@ lastIndex :: Log -> Int
 lastIndex l = length l - 1
 
 lastTerm :: Log -> Int
-lastTerm l = if null l then -1 else term $ l !! lastIndex l 
+lastTerm l = if null l then -1 else term $ l !! lastIndex l
+
+termOf :: Log -> Int -> Int
+termOf l i = if null l || i > lastIndex l then -1 else term $ l !! i 
 
 append :: Log -> Int -> V.Vector T.LogEntry -> Log
 append l startIndex entries = 
@@ -36,8 +39,8 @@ append l startIndex entries =
     newEntry e = LogEntry (entryTuple e) (entryTerm e)
     entriesL = map newEntry (V.toList entries)
 
-appendLocal :: Log -> (String, String) -> Int -> Log
-appendLocal l (k, v) term = l ++ [LogEntry (k, v) term]
+appendUncommitted :: Log -> (String, String) -> Int -> Log
+appendUncommitted l (k, v) term = l ++ [LogEntry (k, v) term]
 
 termMatchedAtIndex :: Log -> Int -> Int -> Bool
 termMatchedAtIndex l t i = 

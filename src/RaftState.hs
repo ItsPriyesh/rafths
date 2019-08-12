@@ -9,12 +9,14 @@ import qualified Data.Map as M
 
 data State = Follower  Props 
            | Candidate Props 
-           | Leader    Props (M.Map Peer PeerMeta)
+           | Leader    Props PeerMetadata
            deriving Show
 
 data Peer = Peer { host :: String,  port :: Int } deriving (Eq, Show, Read, Generic, Ord)
 
 data PeerMeta = PeerMeta { nextIndex :: Int, matchIndex :: Int } deriving Show
+
+type PeerMetadata = M.Map Peer PeerMeta
 
 data Props = Props {
   self :: Peer,
@@ -41,6 +43,17 @@ toFollower (Leader p _) = Follower p
 newLeader :: Props -> [Peer] -> State
 newLeader p peers = Leader p $ M.fromList $ map newMeta peers
   where newMeta peer = (peer, PeerMeta (lastIndex $ log p) 0)
+
+nextIndexForPeer :: PeerMetadata -> Peer -> Int
+nextIndexForPeer meta peer = maybe 0 nextIndex $ M.lookup peer meta
+
+matchIndexForPeer :: PeerMetadata -> Peer -> Int
+matchIndexForPeer meta peer = maybe 0 matchIndex $ M.lookup peer meta
+
+appendLocally :: State -> (String, String) -> State
+appendLocally (Leader p meta) (k, v) = Leader p { 
+    log = appendUncommitted (log p) (k, v) (currentTerm p) 
+  } meta
 
 newCandidate :: Props -> State
 newCandidate p = Candidate p { currentTerm = 1 + currentTerm p}

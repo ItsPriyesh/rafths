@@ -51,10 +51,17 @@ instance KeyValueStore NodeHand where
 
   put h k v = getState h >>= update
     where
-      update (Leader p i) = do
-        setState h $ Leader p { log = appendLocal (log p) (k, v) (currentTerm p) } i
-        -- TODO fire rpc to reps
-      update _ = pure ()
+      update (Leader p meta) = do
+        let state' = appendLocally (Leader p meta) (k, v)
+        setState h state'
+        semaphore <- newEmptyMVar
+        repCount <- newCounter 1
+        let quorum = majority $ peers h
+        mapM_ (forkIO . propagate state' repCount quorum semaphore) $ peers h
+        res <- timeout (msToμs 800) $ takeMVar semaphore
+        pure $ maybe False (const True) res
+      update _ = 
+        pure False
 
   isLeader h = fmap leads $ getState h
     where 
@@ -68,9 +75,6 @@ instance KeyValueStore NodeHand where
       leader' (Candidate p) = tupledMaybe p
       tupled p = (host p, port p)
       tupledMaybe p = fmap (tupled . read) (leader p)
-
-propagateEntry :: (String, String) -> IO ()
-propagateEntry (k, v) = pure ()
 
 newNodeHandler :: PortNumber -> [Peer] -> IO NodeHand
 newNodeHandler port cluster = do
@@ -114,6 +118,28 @@ serve httpPort raftPort cluster = do
 
   _ <- runServer hand RaftNodeService.process raftPort
   print "server terminated"
+  where
+      heartbeatPeriodμs = msToμs 5000 -- 5s
+
+propagate :: State -> AtomicCounter -> Int -> MVar Bool -> Peer -> IO ()
+propagate (Leader p meta) count quorum sem peer = do
+  replicated <- replicateLog p (self p) peer (nextIndexForPeer meta peer)
+  newCount <- if replicated then incrCounter 1 count else readCounter count
+  when (newCount >= quorum) $ putMVar sem True
+
+replicateLog :: Props -> Peer -> Peer -> Int -> IO Bool
+replicateLog p leader follower nextIndex = do
+  client <- newTClient follower
+  case client of
+    Just c -> do
+      let req = newAppendRequest term (show leader) (commitIndex p) prevIndex prevTerm entries
+      fmap appendResponseSuccess $ Client.appendEntries c req
+    Nothing -> pure False
+  where
+    term = currentTerm p
+    prevIndex = nextIndex - 1
+    prevTerm = if prevIndex /= -1 then termOf (log p) prevIndex else -1
+    entries = V.fromList $ map (\(LogEntry (k, v) t) -> newLogEntry (k, v) t) $ drop nextIndex $ log p
 
 data Event = ElectionTimeout | ReceivedAppend deriving Show
 
@@ -189,8 +215,6 @@ restartElectionTimeout h = do
       print "timeout complete! writing ElectionTimeout event"
       writeChan (chan h) ElectionTimeout
 
-heartbeatPeriodμs = 5 * 10^6 -- 5s
-
 sendHeartbeats :: Props -> [Peer] -> IO ()
 sendHeartbeats p peers = do
   clients <- mapM newTClient peers
@@ -249,6 +273,9 @@ requestVoteFromPeer p peer = do
     _ -> pure Nothing
 
 randomElectionTimeout :: IO Int64
-randomElectionTimeout = randomRIO (t, 2 * t)
-  where t = (5 * 10^6) -- 5s
+randomElectionTimeout = fmap fromIntegral $ randomRIO (t, 2 * t)
+  where t = msToμs 5000 -- 5s
+
+msToμs :: Int -> Int
+msToμs ms = ms * 1000
 
