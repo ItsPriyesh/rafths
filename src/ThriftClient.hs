@@ -1,9 +1,13 @@
+{-# LANGUAGE ScopedTypeVariables #-}
+
 module ThriftClient where
 
 import RaftState
 import Network
 import System.IO
 import System.Timeout
+import Control.Exception
+
 import Thrift.Protocol
 import Thrift.Protocol.Binary
 import Thrift.Transport
@@ -14,14 +18,14 @@ type TProto = BinaryProtocol (FramedTransport Handle)
 type TClient = (TProto, TProto)
 
 newTClient :: Peer -> IO (Maybe TClient)
-newTClient (Peer host port) = do
-  print "hopening" -- TODO: failure during connection causes the thread to hang (timout not working)
-  transport <- timeout clientConnectionTimeoutμs (hOpen (host, PortNumber . fromIntegral $ port))
-  print "hopened"
+newTClient peer = do
+  transport <- connect peer
   case transport of
     Just t -> fmap (\p -> Just (p, p)) (frame t)
     Nothing -> pure Nothing
   where
     frame t = fmap BinaryProtocol (openFramedTransport t)
 
-clientConnectionTimeoutμs = 2 * 10^5 -- 200ms
+connect :: Peer -> IO (Maybe Handle)
+connect (Peer h p) = catch (fmap Just open) (\(e :: SomeException) -> pure Nothing)
+  where open = hOpen (h, PortNumber . fromIntegral $ p)

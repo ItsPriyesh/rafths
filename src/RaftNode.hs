@@ -51,16 +51,16 @@ instance KeyValueStore NodeHand where
   put h k v = getState h >>= update
     where
       update (Leader p n m) = do
-        setState h (Leader p { log = appendLocal (log p) (k, v) (currentTerm p) } n m)
+        setState h $ Leader p { log = appendLocal (log p) (k, v) (currentTerm p) } n m
         -- TODO fire rpc to reps
       update _ = pure ()
 
-  isLeader h = fmap leads (getState h)
+  isLeader h = fmap leads $ getState h
     where 
       leads (Leader _ _ _) = True
       leads _ = False
   
-  getLeader h = fmap leader' (getState h)
+  getLeader h = fmap leader' $ getState h
     where 
       leader' (Leader p _ _) = Just $ tupled $ self p
       leader' (Follower p) = tupledMaybe p
@@ -68,10 +68,13 @@ instance KeyValueStore NodeHand where
       tupled p = (host p, port p)
       tupledMaybe p = fmap (tupled . read) (leader p)
 
+propagateEntry :: (String, String) -> IO ()
+propagateEntry (k, v) = 
+
 newNodeHandler :: PortNumber -> [Peer] -> IO NodeHand
 newNodeHandler port peers = do
   host <- getHostName
-  state <- newMVar $ Follower (newProps $ Peer host (fromIntegral $ port))
+  state <- newMVar $ Follower $ newProps $ Peer host $ fromIntegral $ port
   chan <- newChan :: IO (Chan Event)
   timer <- newTimer
   pure $ NodeHand state chan timer peers
@@ -88,20 +91,15 @@ setStateProps h s p = setState h $ setProps s p
 serve :: PortNumber -> PortNumber -> [Peer] -> IO ()
 serve httpPort raftPort peers = do
   hand <- newNodeHandler raftPort peers
-
   forkIO $ serveHttpApi httpPort hand
-
   restartElectionTimeout hand
 
   forkIO $ forever $ do
     event <- readChan $ chan hand
     state <- getState hand
-    
-    print $ "receive! " ++ show event ++ " state: " ++ show state
-    
+    print $ "receive! " ++ show event ++ " state: " ++ show state    
     state' <- handleEvent hand state event
     setState hand state'
-
     print $ "handled! state': " ++ show state'
     print $ "--------------------------------"
 
@@ -140,7 +138,7 @@ requestVoteHandler h r = do
   let p = getProps state
   
   when (voteRequestTerm r > currentTerm p) $ 
-    setState h (Follower p { currentTerm = voteRequestTerm r })
+    setState h $ Follower p { currentTerm = voteRequestTerm r }
 
   let grant = shouldGrantVote p r
   when grant $ do
@@ -217,7 +215,7 @@ startElection h (Candidate p) = do
     poll = do
       elect <- newEmptyMVar
       voteCount <- newCounter 1
-      mapM_ (forkIO . getVote voteCount elect) (filter (/= self p) (peers h))
+      mapM_ (forkIO . getVote voteCount elect) $ filter (/= self p) (peers h)
       takeMVar elect
 
     getVote :: AtomicCounter -> MVar Bool -> Peer -> IO ()
@@ -227,7 +225,7 @@ startElection h (Candidate p) = do
         Just v -> do
           print $ "got requestVote response! " ++ show v
           votes <- if T.voteResponse_granted v then incrCounter 1 count else readCounter count
-          when (votes >= majority (peers h)) (putMVar elect True)
+          when (votes >= majority (peers h)) $ putMVar elect True
         _ -> pure ()
 
 shouldGrantVote :: Props -> T.VoteRequest -> Bool
