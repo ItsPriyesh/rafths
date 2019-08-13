@@ -4,7 +4,7 @@ module RaftNode (serve) where
 
 import RaftState
 import RaftLog
-import KeyValueApi
+import qualified KeyValueApi
 import ThriftClient
 import Thrift.Server
 import ThriftTypeConverter
@@ -44,7 +44,7 @@ instance RaftNodeService_Iface NodeHand where
   appendEntries = appendEntriesHandler
 
 -- Key-value store instance
-instance KeyValueStore NodeHand where
+instance KeyValueApi.KeyValueStore NodeHand where
   get h k = fmap getProps (getState h) >>= lookup
     where
       store p = materialize (log p) (commitIndex p)
@@ -103,7 +103,7 @@ setStateProps h s p = setState h $ setProps s p
 serve :: PortNumber -> PortNumber -> [Peer] -> IO ()
 serve httpPort raftPort cluster = do
   hand <- newNodeHand raftPort cluster
-  forkIO $ serveHttpApi httpPort hand
+  forkIO $ KeyValueApi.serve httpPort hand
   restartElectionTimeout hand
 
   forkIO $ forever $ do

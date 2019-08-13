@@ -35,6 +35,9 @@ dependencies:
 - hostname
 - timers
 - suspend
+- scotty
+- http-types
+- mtl
 
 library:
   source-dirs: 
