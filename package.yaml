@@ -36,8 +36,8 @@ dependencies:
 - timers
 - suspend
 - scotty
-- http-types
 - mtl
+- yaml
 
 library:
   source-dirs: 

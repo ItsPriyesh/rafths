@@ -1,0 +1,10 @@
+nodes:
+  - host: "Priyeshs-MacBook-Pro.local"
+    apiPort: 4041
+    rpcPort: 8081
+  - host: "Priyeshs-MacBook-Pro.local"
+    apiPort: 4042
+    rpcPort: 8082
+  - host: "Priyeshs-MacBook-Pro.local"
+    apiPort: 4043
+    rpcPort: 8083

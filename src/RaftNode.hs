@@ -76,16 +76,15 @@ instance KeyValueApi.KeyValueStore NodeHand where
   
   getLeader h = fmap leader' $ getState h
     where 
-      leader' (Leader p _) = Just $ tupled $ self p
+      leader' (Leader p _) = Just $ self p
       leader' (Follower p) = tupledMaybe p
       leader' (Candidate p) = tupledMaybe p
-      tupled p = (host p, port p)
-      tupledMaybe p = fmap (tupled . read) (leader p)
+      tupledMaybe p = fmap read $ leader p
 
-newNodeHand :: PortNumber -> [Peer] -> IO NodeHand
-newNodeHand port cluster = do
+newNodeHand :: PortNumber -> PortNumber -> [Peer] -> IO NodeHand
+newNodeHand rpcPort apiPort cluster = do
   host <- getHostName
-  let self = Peer host $ fromIntegral port
+  let self = Peer host (fromIntegral rpcPort) (fromIntegral apiPort)
   state <- newMVar $ Follower $ newProps self
   chan <- newChan :: IO (Chan Event)
   timer <- newTimer
@@ -101,9 +100,9 @@ setStateProps :: NodeHand -> State -> Props -> IO ()
 setStateProps h s p = setState h $ setProps s p
 
 serve :: PortNumber -> PortNumber -> [Peer] -> IO ()
-serve httpPort raftPort cluster = do
-  hand <- newNodeHand raftPort cluster
-  forkIO $ KeyValueApi.serve httpPort hand
+serve apiPort rpcPort cluster = do
+  hand <- newNodeHand rpcPort apiPort cluster
+  forkIO $ KeyValueApi.serve apiPort hand
   restartElectionTimeout hand
 
   forkIO $ forever $ do
@@ -122,7 +121,7 @@ serve httpPort raftPort cluster = do
     case state of (Leader p _) -> sendHeartbeats p $ peers hand
                   _ -> pure ()
 
-  _ <- runServer hand RaftNodeService.process raftPort
+  _ <- runServer hand RaftNodeService.process rpcPort
   print "server terminated"
   where
       heartbeatPeriodμs = msToμs 5000 -- 5s

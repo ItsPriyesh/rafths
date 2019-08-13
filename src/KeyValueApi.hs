@@ -3,6 +3,7 @@
 
 module KeyValueApi where
 
+import RaftState
 import qualified Web.Scotty as S
 import Control.Monad
 import Control.Monad.Trans
@@ -11,7 +12,7 @@ import Data.Text.Lazy
 
 class KeyValueStore s where
   isLeader :: s -> IO Bool
-  getLeader :: s -> IO (Maybe (String, Int))
+  getLeader :: s -> IO (Maybe Peer)
   get :: s -> String -> IO (Maybe String)
   put :: s -> String -> String -> IO Bool
 
@@ -48,7 +49,7 @@ onLeader s k op = do
   else do
     leader <- getLeader s
     pure $ case leader of
-      Just (h, p) -> Redirect $ leaderLocation h p k
+      Just (Peer h _ p) -> Redirect $ leaderLocation h p k
       _ -> Unavailable
 
 leaderLocation :: String -> Int -> String -> Text

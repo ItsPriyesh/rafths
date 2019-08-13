@@ -6,13 +6,20 @@ import RaftLog
 import GHC.Generics (Generic)
 import Prelude hiding (log)
 import qualified Data.Map as M
+import qualified Data.Yaml as YAML
 
 data State = Follower  Props 
            | Candidate Props 
            | Leader    Props PeerMetadata
            deriving Show
 
-data Peer = Peer { host :: String,  port :: Int } deriving (Eq, Show, Read, Generic, Ord)
+data Peer = Peer {
+  host    :: String,  
+  rpcPort :: Int,
+  apiPort :: Int
+} deriving (Eq, Show, Read, Generic, Ord)
+
+instance YAML.FromJSON Peer
 
 data PeerMeta = PeerMeta { nextIndex :: Int, matchIndex :: Int } deriving Show
 
