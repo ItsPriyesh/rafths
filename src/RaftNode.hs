@@ -1,25 +1,25 @@
 {-# LANGUAGE DeriveGeneric #-}
 
-module RaftNode where
+module RaftNode (serve) where
 
-import Prelude hiding (log)
-import GHC.Generics (Generic)
-import GHC.Conc.Sync (ThreadId)
-import Data.Hashable
-import Data.Atomics.Counter
-import Data.Maybe
-import Data.Int
-import Data.List
-import qualified Data.Map as M
-import qualified Data.Vector as V
+import RaftState
+import RaftLog
+import KeyValueApi
+import ThriftClient
+import Thrift.Server
+import ThriftTypeConverter
 import Control.Concurrent.MVar
 import Control.Concurrent.Chan
 import Control.Concurrent.Timer
 import Control.Concurrent.Suspend.Lifted
 import Control.Concurrent (forkIO, threadDelay)
 import Control.Monad (forever, when)
-import Thrift
-import Thrift.Server
+import Data.Maybe
+import Data.Int
+import Data.List
+import Data.Atomics.Counter
+import qualified Data.Map as M
+import qualified Data.Vector as V
 import Network
 import Network.HostName
 import System.Random
@@ -28,21 +28,22 @@ import RaftNodeService_Iface
 import RaftNodeService
 import qualified RaftNodeService_Client as Client
 import qualified Rafths_Types as T
+import Prelude hiding (log)
+import GHC.Generics (Generic)
 
-import RaftState
-import RaftLog
-import KeyValueApi
-import ThriftClient
-import ThriftTypeConverter
+data NodeHand = NodeHand { 
+  state :: MVar State, 
+  chan  :: Chan Event, 
+  timer :: TimerIO, 
+  peers :: [Peer] 
+}
 
-data NodeHand = NodeHand { state :: MVar State, chan :: Chan Event, timer :: TimerIO, peers :: [Peer] }
-
--- RPC Handlers
+-- RPC handlers
 instance RaftNodeService_Iface NodeHand where
   requestVote = requestVoteHandler
   appendEntries = appendEntriesHandler
 
--- Key-Value store interface
+-- Key-value store instance
 instance KeyValueStore NodeHand where
   get h k = fmap getProps (getState h) >>= lookup
     where
@@ -54,12 +55,17 @@ instance KeyValueStore NodeHand where
       update (Leader p meta) = do
         let state' = appendLocally (Leader p meta) (k, v)
         setState h state'
+
         semaphore <- newEmptyMVar
         repCount <- newCounter 1
         let quorum = majority $ peers h
-        mapM_ (forkIO . propagate h state' repCount quorum semaphore) $ peers h
-        res <- timeout (msToμs 800) $ takeMVar semaphore
-        pure $ maybe False (const True) res
+        let appendRpc = forkIO . propagate h state' repCount quorum semaphore
+        mapM_ appendRpc $ peers h
+        committed <- timeout (msToμs 800) $ takeMVar semaphore
+
+        case committed of
+          Just True -> fmap (const True) $ setState h $ commitLatest state'
+          _ -> pure False
       update _ = 
         pure False
 
@@ -76,27 +82,27 @@ instance KeyValueStore NodeHand where
       tupled p = (host p, port p)
       tupledMaybe p = fmap (tupled . read) (leader p)
 
-newNodeHandler :: PortNumber -> [Peer] -> IO NodeHand
-newNodeHandler port cluster = do
+newNodeHand :: PortNumber -> [Peer] -> IO NodeHand
+newNodeHand port cluster = do
   host <- getHostName
-  let self = Peer host (fromIntegral port)
+  let self = Peer host $ fromIntegral port
   state <- newMVar $ Follower $ newProps self
   chan <- newChan :: IO (Chan Event)
   timer <- newTimer
   pure $ NodeHand state chan timer $ filter (/= self) cluster
 
 getState :: NodeHand -> IO State
-getState h = readMVar . state $ h
+getState h = readMVar $ state h
 
 setState :: NodeHand -> State -> IO ()
-setState h s = modifyMVar_ (state h) (const $ pure s)
+setState h s = modifyMVar_ (state h) $ const $ pure s
 
 setStateProps :: NodeHand -> State -> Props -> IO ()
 setStateProps h s p = setState h $ setProps s p
 
 serve :: PortNumber -> PortNumber -> [Peer] -> IO ()
 serve httpPort raftPort cluster = do
-  hand <- newNodeHandler raftPort cluster
+  hand <- newNodeHand raftPort cluster
   forkIO $ serveHttpApi httpPort hand
   restartElectionTimeout hand
 
@@ -113,38 +119,13 @@ serve httpPort raftPort cluster = do
     threadDelay heartbeatPeriodμs
     state <- getState hand
     print $ "heartbeat thread: state = " ++ show state
-    case state of (Leader p _) -> sendHeartbeats p (peers hand)
+    case state of (Leader p _) -> sendHeartbeats p $ peers hand
                   _ -> pure ()
 
   _ <- runServer hand RaftNodeService.process raftPort
   print "server terminated"
   where
       heartbeatPeriodμs = msToμs 5000 -- 5s
-
-propagate :: NodeHand -> State -> AtomicCounter -> Int -> MVar Bool -> Peer -> IO ()
-propagate h (Leader p meta) count quorum sem peer = do
-  replicated <- replicateLog p (self p) peer (nextIndexForPeer meta peer)
-  newCount <- if replicated then do
-                setState h $ Leader p $ updateMetadataForPeer meta peer $ lastIndex $ log p
-                incrCounter 1 count 
-              else do
-                setState h $ Leader p $ decrementIndexForPeer meta peer
-                readCounter count
-  when (newCount >= quorum) $ putMVar sem True
-
-replicateLog :: Props -> Peer -> Peer -> Int -> IO Bool
-replicateLog p leader follower nextIndex = do
-  client <- newTClient follower
-  case client of
-    Just c -> do
-      let req = newAppendRequest term (show leader) (commitIndex p) prevIndex prevTerm entries
-      fmap appendResponseSuccess $ Client.appendEntries c req
-    Nothing -> pure False
-  where
-    term = currentTerm p
-    prevIndex = nextIndex - 1
-    prevTerm = if prevIndex /= -1 then termOf (log p) prevIndex else -1
-    entries = V.fromList $ map (\(LogEntry (k, v) t) -> newLogEntry (k, v) t) $ drop nextIndex $ log p
 
 data Event = ElectionTimeout | ReceivedAppend deriving Show
 
@@ -256,6 +237,31 @@ startElection h (Candidate p) = do
           when (votes >= majority (peers h)) $ putMVar elect True
         _ -> pure ()
 
+propagate :: NodeHand -> State -> AtomicCounter -> Int -> MVar Bool -> Peer -> IO ()
+propagate h (Leader p meta) count quorum sem peer = do
+  replicated <- replicateLog p (self p) peer (nextIndexForPeer meta peer)
+  newCount <- if replicated then do
+                setState h $ Leader p $ updateMetadataForPeer meta peer $ lastIndex $ log p
+                incrCounter 1 count 
+              else do
+                setState h $ Leader p $ decrementIndexForPeer meta peer
+                readCounter count
+  when (newCount >= quorum) $ putMVar sem True
+
+replicateLog :: Props -> Peer -> Peer -> Int -> IO Bool
+replicateLog p leader follower nextIndex = do
+  client <- newTClient follower
+  case client of
+    Just c -> do
+      let req = newAppendRequest term (show leader) (commitIndex p) prevIndex prevTerm entries
+      fmap appendResponseSuccess $ Client.appendEntries c req
+    Nothing -> pure False
+  where
+    term = currentTerm p
+    prevIndex = nextIndex - 1
+    prevTerm = if prevIndex /= -1 then termOf (log p) prevIndex else -1
+    entries = V.fromList $ map (\(LogEntry (k, v) t) -> newLogEntry (k, v) t) $ drop nextIndex $ log p
+
 shouldGrantVote :: Props -> T.VoteRequest -> Bool
 shouldGrantVote p r = 
   if currentTerm p > voteRequestTerm r then False
@@ -283,4 +289,3 @@ randomElectionTimeout = fmap fromIntegral $ randomRIO (t, 2 * t)
 
 msToμs :: Int -> Int
 msToμs ms = ms * 1000
-

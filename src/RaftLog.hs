@@ -13,7 +13,7 @@ data LogEntry = LogEntry { keyValue :: (String, String), term :: Int } deriving 
 
 -- TODO: maintain last applied index and cache partial result
 materialize :: Log -> Int -> M.Map String String
-materialize l commit = M.fromList $ map keyValue (take (commit + 1) l)
+materialize l commit = M.fromList $ map keyValue $ take (commit + 1) l
 
 lastIndex :: Log -> Int
 lastIndex l = length l - 1
@@ -34,7 +34,7 @@ append l startIndex entries =
     (left, right) = splitAt startIndex l
 
     conflict (e, i) = termConflictAtIndex l (term e) i
-    conflictingIndex = findIndex conflict (zip entriesL [startIndex..])    
+    conflictingIndex = findIndex conflict $ zip entriesL [startIndex..]
     
     newEntry e = LogEntry (entryTuple e) (entryTerm e)
     entriesL = map newEntry (V.toList entries)

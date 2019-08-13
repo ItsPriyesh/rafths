@@ -19,11 +19,11 @@ data PeerMeta = PeerMeta { nextIndex :: Int, matchIndex :: Int } deriving Show
 type PeerMetadata = M.Map Peer PeerMeta
 
 data Props = Props {
-  self :: Peer,
-  log :: Log,
+  self        :: Peer,
+  log         :: Log,
   currentTerm :: Int,
-  leader :: Maybe String,
-  votedFor :: Maybe String,
+  leader      :: Maybe String,
+  votedFor    :: Maybe String,
   commitIndex :: Int,
   lastApplied :: Int
 } deriving Show
@@ -62,6 +62,9 @@ appendLocally :: State -> (String, String) -> State
 appendLocally (Leader p meta) (k, v) = Leader p { 
     log = appendUncommitted (log p) (k, v) (currentTerm p) 
   } meta
+
+commitLatest :: State -> State
+commitLatest (Leader p meta) = Leader p { commitIndex = lastIndex $ log p } meta
 
 newCandidate :: Props -> State
 newCandidate p = Candidate p { currentTerm = 1 + currentTerm p}
