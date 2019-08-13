@@ -50,6 +50,14 @@ nextIndexForPeer meta peer = maybe 0 nextIndex $ M.lookup peer meta
 matchIndexForPeer :: PeerMetadata -> Peer -> Int
 matchIndexForPeer meta peer = maybe 0 matchIndex $ M.lookup peer meta
 
+updateMetadataForPeer :: PeerMetadata -> Peer -> Int -> PeerMetadata
+updateMetadataForPeer meta peer lastLogIndex = M.insert peer m meta
+  where m = PeerMeta (lastLogIndex + 1) lastLogIndex
+
+decrementIndexForPeer :: PeerMetadata -> Peer -> PeerMetadata
+decrementIndexForPeer meta peer = M.adjust decr peer meta
+  where decr (PeerMeta n m) = if n > 0 then PeerMeta (n - 1) m else PeerMeta n m
+
 appendLocally :: State -> (String, String) -> State
 appendLocally (Leader p meta) (k, v) = Leader p { 
     log = appendUncommitted (log p) (k, v) (currentTerm p) 

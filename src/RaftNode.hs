@@ -57,7 +57,7 @@ instance KeyValueStore NodeHand where
         semaphore <- newEmptyMVar
         repCount <- newCounter 1
         let quorum = majority $ peers h
-        mapM_ (forkIO . propagate state' repCount quorum semaphore) $ peers h
+        mapM_ (forkIO . propagate h state' repCount quorum semaphore) $ peers h
         res <- timeout (msToμs 800) $ takeMVar semaphore
         pure $ maybe False (const True) res
       update _ = 
@@ -121,10 +121,15 @@ serve httpPort raftPort cluster = do
   where
       heartbeatPeriodμs = msToμs 5000 -- 5s
 
-propagate :: State -> AtomicCounter -> Int -> MVar Bool -> Peer -> IO ()
-propagate (Leader p meta) count quorum sem peer = do
+propagate :: NodeHand -> State -> AtomicCounter -> Int -> MVar Bool -> Peer -> IO ()
+propagate h (Leader p meta) count quorum sem peer = do
   replicated <- replicateLog p (self p) peer (nextIndexForPeer meta peer)
-  newCount <- if replicated then incrCounter 1 count else readCounter count
+  newCount <- if replicated then do
+                setState h $ Leader p $ updateMetadataForPeer meta peer $ lastIndex $ log p
+                incrCounter 1 count 
+              else do
+                setState h $ Leader p $ decrementIndexForPeer meta peer
+                readCounter count
   when (newCount >= quorum) $ putMVar sem True
 
 replicateLog :: Props -> Peer -> Peer -> Int -> IO Bool
