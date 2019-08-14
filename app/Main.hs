@@ -20,8 +20,7 @@ main = do
   let apiPort = read $ args !! 0 :: PortNumber
   let rpcPort = read $ args !! 1 :: PortNumber
 
-  config <- YAML.decodeFile "cluster.yaml" :: IO (Maybe ClusterConfig)
-  
+  config <- YAML.decodeFile (args !! 2) :: IO (Maybe ClusterConfig)
   case config of
     Just (ClusterConfig peers) -> RaftNode.serve apiPort rpcPort peers
     _ -> print "Invalid cluster config!"

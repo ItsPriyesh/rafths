@@ -174,18 +174,19 @@ appendEntriesHandler h r = do
       votedFor = Nothing,
       leader = Just $ leaderId r
     }
-    if logMatch $ log p then do
+    if invalidLog $ log p then do
+      setState h (Follower p')
+      pure $ newAppendResponse (currentTerm p') False
+    else do
       let newLog = appendLog p' (entries r)
       let localCommit = commitIndex p
       let newCommit = if leaderCommit > localCommit then min leaderCommit (lastIndex newLog) 
                       else localCommit 
       setState h (Follower p' { log = newLog, commitIndex = newCommit })
       pure $ newAppendResponse (currentTerm p') True
-    else do
-      setState h (Follower p')
-      pure $ newAppendResponse (currentTerm p') False
   where
-    logMatch l = (prevLogIndex r) /= -1 && termMatchedAtIndex l (prevLogTerm r) (prevLogIndex r)
+    invalidLog l = (prevLogIndex r) /= -1 && not (termMatchedAtIndex l (prevLogTerm r) (prevLogIndex r))
+
     appendLog p entries = append (log p) (prevLogIndex r + 1) entries
     leaderCommit = leaderCommitIndex r
 

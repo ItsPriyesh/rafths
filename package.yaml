@@ -38,6 +38,8 @@ dependencies:
 - scotty
 - mtl
 - yaml
+- wreq
+- lens
 
 library:
   source-dirs: 

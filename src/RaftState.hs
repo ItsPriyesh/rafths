@@ -49,7 +49,7 @@ toFollower (Leader p _) = Follower p
 
 newLeader :: Props -> [Peer] -> State
 newLeader p peers = Leader p $ M.fromList $ map newMeta peers
-  where newMeta peer = (peer, PeerMeta (lastIndex $ log p) 0)
+  where newMeta peer = (peer, PeerMeta (length $ log p) 0)
 
 nextIndexForPeer :: PeerMetadata -> Peer -> Int
 nextIndexForPeer meta peer = maybe 0 nextIndex $ M.lookup peer meta
