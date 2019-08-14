@@ -77,9 +77,8 @@ instance KeyValueApi.KeyValueStore NodeHand where
   getLeader h = fmap leader' $ getState h
     where 
       leader' (Leader p _) = Just $ self p
-      leader' (Follower p) = tupledMaybe p
-      leader' (Candidate p) = tupledMaybe p
-      tupledMaybe p = fmap read $ leader p
+      leader' (Follower p) = fmap read $ leader p
+      leader' (Candidate p) = fmap read $ leader p
 
 newNodeHand :: PortNumber -> PortNumber -> [Peer] -> IO NodeHand
 newNodeHand rpcPort apiPort cluster = do
@@ -108,34 +107,29 @@ serve apiPort rpcPort cluster = do
   forkIO $ forever $ do
     event <- readChan $ chan hand
     state <- getState hand
-    print $ "receive! " ++ show event ++ " state: " ++ show state    
     state' <- handleEvent hand state event
     setState hand state'
-    print $ "handled! state': " ++ show state'
-    print $ "--------------------------------"
 
   forkIO $ forever $ do
     threadDelay heartbeatPeriodμs
     state <- getState hand
-    print $ "heartbeat thread: state = " ++ show state
+    print $ "state = " ++ show state
     case state of (Leader p _) -> sendHeartbeats p $ peers hand
                   _ -> pure ()
 
   _ <- runServer hand RaftNodeService.process rpcPort
-  print "server terminated"
+  print "terminated!"
   where
-      heartbeatPeriodμs = msToμs 5000 -- 5s
+      heartbeatPeriodμs = msToμs 2000 -- 2s
 
 data Event = ElectionTimeout | ReceivedAppend deriving Show
 
 handleEvent :: NodeHand -> State -> Event -> IO State
 handleEvent h (Follower p) ElectionTimeout = do
-  print "follower timed out! becoming candidate and starting election"
   let state = newCandidate p
   setState h state
   startElection h state
 handleEvent h (Candidate p) ElectionTimeout = do
-  print "timed out during election! restarting election"
   let state = newCandidate p
   setState h state
   startElection h state
@@ -145,7 +139,6 @@ handleEvent _ s _ = pure s
 
 requestVoteHandler :: NodeHand -> T.VoteRequest -> IO T.VoteResponse
 requestVoteHandler h r = do
-  print $ "RPC: requestVote() " ++ show r
   state <- getState h
   let p = getProps state
   
@@ -161,7 +154,6 @@ requestVoteHandler h r = do
 
 appendEntriesHandler :: NodeHand -> T.AppendRequest -> IO T.AppendResponse
 appendEntriesHandler h r = do
-  print $ "RPC: appendEntries() " ++ show r
   restartElectionTimeout h
   writeChan (chan h) ReceivedAppend
   state <- getState h
@@ -193,13 +185,10 @@ appendEntriesHandler h r = do
 restartElectionTimeout :: NodeHand -> IO ()
 restartElectionTimeout h = do
   timeout <- randomElectionTimeout
-  print $ "restarting election timeout " ++ show timeout
-  oneShotStart (timer h) (onComplete >>= const (pure ())) (usDelay timeout)
+  oneShotStart (timer h) (publishEvent >>= const (pure ())) (usDelay timeout)
   pure ()
   where
-    onComplete = forkIO $ do
-      print "timeout complete! writing ElectionTimeout event"
-      writeChan (chan h) ElectionTimeout
+    publishEvent = forkIO $ writeChan (chan h) ElectionTimeout
 
 sendHeartbeats :: Props -> [Peer] -> IO ()
 sendHeartbeats p peers = do
@@ -213,10 +202,8 @@ sendHeartbeats p peers = do
 
 startElection :: NodeHand -> State -> IO State
 startElection h (Candidate p) = do
-  print "starting election"
   electionTimeout <- fmap fromIntegral randomElectionTimeout
   res <- timeout electionTimeout poll
-  print $ "election result = " ++ show res
   case res of Just True -> pure $ newLeader p $ peers h
               _ -> fmap (const $ Candidate p) $ writeChan (chan h) ElectionTimeout
   where
@@ -232,7 +219,6 @@ startElection h (Candidate p) = do
       vote <- requestVoteFromPeer p peer
       case vote of 
         Just v -> do
-          print $ "got requestVote response " ++ show v
           votes <- if T.voteResponse_granted v then incrCounter 1 count else readCounter count
           when (votes >= majority (peers h)) $ putMVar elect True
         _ -> pure ()
@@ -273,19 +259,17 @@ shouldGrantVote p r =
 
 requestVoteFromPeer :: Props -> Peer -> IO (Maybe T.VoteResponse)
 requestVoteFromPeer p peer = do
-  print $ "creating client to " ++ show peer
   client <- newTClient peer
   let lastLogIndex = lastIndex $ log p
   let lastLogTerm = lastTerm $ log p
   let req = newVoteRequest (show $ self p) (currentTerm p) lastLogTerm lastLogIndex
-  print $ "sending request " ++ show req
   case client of
     Just c -> fmap Just (Client.requestVote c req)
     _ -> pure Nothing
 
 randomElectionTimeout :: IO Int64
 randomElectionTimeout = fmap fromIntegral $ randomRIO (t, 2 * t)
-  where t = msToμs 5000 -- 5s
+  where t = msToμs 1000 -- 1s
 
 msToμs :: Int -> Int
 msToμs ms = ms * 1000

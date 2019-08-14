@@ -21,11 +21,11 @@ newTClient :: Peer -> IO (Maybe TClient)
 newTClient peer = do
   transport <- connect peer
   case transport of
-    Just t -> fmap (\p -> Just (p, p)) (frame t)
+    Just t -> fmap (\p -> Just (p, p)) $ frame t
     Nothing -> pure Nothing
   where
-    frame t = fmap BinaryProtocol (openFramedTransport t)
+    frame t = fmap BinaryProtocol $ openFramedTransport t
 
 connect :: Peer -> IO (Maybe Handle)
-connect (Peer h p _) = catch (fmap Just open) (\(e :: SomeException) -> pure Nothing)
+connect (Peer h p _) = catch (fmap Just open) $ \(e :: SomeException) -> pure Nothing
   where open = hOpen (h, PortNumber . fromIntegral $ p)
